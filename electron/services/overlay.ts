@@ -309,23 +309,152 @@ const OVERLAY_HTML = `<!DOCTYPE html>
             background: rgba(0,0,0,0.5);
             color: white;
             font-family: 'Segoe UI', sans-serif;
+            z-index: 100;
         }
         #status.connected { background: rgba(34, 197, 94, 0.8); }
         #status.disconnected { background: rgba(239, 68, 68, 0.8); }
+
+        /* Audio enable overlay */
+        #audio-enable-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            cursor: pointer;
+            transition: opacity 0.4s ease;
+        }
+        #audio-enable-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        #audio-enable-overlay .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        #audio-enable-overlay .title {
+            color: white;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        #audio-enable-overlay .subtitle {
+            color: rgba(255,255,255,0.6);
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 13px;
+        }
+        #audio-enable-overlay .pulse-ring {
+            position: absolute;
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: 2px solid rgba(34, 197, 94, 0.4);
+            animation: pulse 2s ease-out infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(0.8); opacity: 1; }
+            100% { transform: scale(1.8); opacity: 0; }
+        }
     </style>
 </head>
 <body>
     <div id="status" class="disconnected">Disconnected</div>
 
+    <!-- Click-to-enable audio overlay: user clicks once to unlock AudioContext -->
+    <div id="audio-enable-overlay">
+        <div class="pulse-ring"></div>
+        <div class="icon">🔊</div>
+        <div class="title">Click to Enable Audio</div>
+        <div class="subtitle">Required by browser to allow audio playback</div>
+    </div>
+
     <script>
         const status = document.getElementById('status');
+        const enableOverlay = document.getElementById('audio-enable-overlay');
         let ws = null;
         let reconnectInterval = null;
-        
-        
+
+        // Audio state
         const audioQueue = [];
         let isPlaying = false;
         let currentAudio = null;
+
+        // AudioContext for unlocking autoplay
+        let audioCtx = null;
+        let audioUnlocked = false;
+
+        // Try to create and resume AudioContext immediately
+        // Some environments (like OBS with "Control audio via OBS") allow this without interaction
+        function tryAutoUnlock() {
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'running') {
+                    // Already unlocked! (e.g. OBS with proper settings)
+                    audioUnlocked = true;
+                    enableOverlay.classList.add('hidden');
+                    console.log('[Overlay] AudioContext auto-unlocked');
+                    return;
+                }
+                // Try to resume - might work in some environments
+                audioCtx.resume().then(() => {
+                    if (audioCtx.state === 'running') {
+                        audioUnlocked = true;
+                        enableOverlay.classList.add('hidden');
+                        console.log('[Overlay] AudioContext resumed automatically');
+                    }
+                }).catch(() => {});
+            } catch (e) {
+                console.warn('[Overlay] AudioContext creation failed:', e);
+            }
+        }
+
+        // Unlock audio on user click
+        function unlockAudio() {
+            if (audioUnlocked) return;
+
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                
+                // Resume the context
+                audioCtx.resume().then(() => {
+                    // Play a silent buffer to fully unlock audio playback
+                    const buffer = audioCtx.createBuffer(1, 1, 22050);
+                    const source = audioCtx.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(audioCtx.destination);
+                    source.start(0);
+
+                    audioUnlocked = true;
+                    enableOverlay.classList.add('hidden');
+                    console.log('[Overlay] Audio unlocked by user interaction');
+
+                    // Process any queued audio that arrived before unlock
+                    processQueue();
+                }).catch(e => {
+                    console.error('[Overlay] Failed to resume AudioContext:', e);
+                });
+            } catch (e) {
+                // Fallback: just hide overlay and try playing anyway
+                audioUnlocked = true;
+                enableOverlay.classList.add('hidden');
+                processQueue();
+            }
+        }
+
+        // Attach click handler to enable overlay
+        enableOverlay.addEventListener('click', unlockAudio);
+        // Also unlock on any click/touch on the page
+        document.addEventListener('click', unlockAudio, { once: true });
+        document.addEventListener('touchstart', unlockAudio, { once: true });
+
+        // Try auto-unlock on load
+        tryAutoUnlock();
 
         function connect() {
             ws = new WebSocket('ws://' + window.location.host);
@@ -361,22 +490,19 @@ const OVERLAY_HTML = `<!DOCTYPE html>
 
         function handleMessage(msg) {
             if (msg.type === 'play-audio') {
-                
                 audioQueue.push({
                     url: msg.data.audioUrl,
                     volume: msg.data.volume
                 });
                 processQueue();
             } else if (msg.type === 'get-queue-size') {
-                
                 if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ 
-                        type: 'queue-size', 
+                    ws.send(JSON.stringify({
+                        type: 'queue-size',
                         data: audioQueue.length + (isPlaying ? 1 : 0)
                     }));
                 }
             } else if (msg.type === 'clear-queue') {
-                
                 audioQueue.length = 0;
                 if (currentAudio) {
                     currentAudio.pause();
@@ -388,17 +514,17 @@ const OVERLAY_HTML = `<!DOCTYPE html>
         }
 
         function processQueue() {
-            if (isPlaying || audioQueue.length === 0) {
+            // Don't process if audio isn't unlocked yet — items stay queued
+            if (!audioUnlocked || isPlaying || audioQueue.length === 0) {
                 return;
             }
 
             isPlaying = true;
             const item = audioQueue.shift();
-            
+
             playAudio(item.url, item.volume, () => {
-                
                 isPlaying = false;
-                setTimeout(processQueue, 100); 
+                setTimeout(processQueue, 100);
             });
         }
 
@@ -407,23 +533,37 @@ const OVERLAY_HTML = `<!DOCTYPE html>
                 currentAudio.pause();
                 currentAudio = null;
             }
-            
+
+            // Ensure AudioContext is running before playing
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume().catch(() => {});
+            }
+
             const audio = new Audio(url);
             currentAudio = audio;
             audio.volume = Math.min(1, Math.max(0, volume));
-            
+
+            // Connect to AudioContext for reliable playback
+            if (audioCtx) {
+                try {
+                    const source = audioCtx.createMediaElementSource(audio);
+                    source.connect(audioCtx.destination);
+                } catch (e) {
+                    // If already connected or other error, continue with normal playback
+                    console.warn('[Overlay] Could not connect to AudioContext:', e);
+                }
+            }
+
             audio.onended = () => {
-                // Notify server that audio ended with duration
                 if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ 
+                    ws.send(JSON.stringify({
                         type: 'audio-ended',
                         duration: audio.duration || 0
                     }));
                 }
                 onEnded();
             };
-            
-            // Handle errors by skipping to next
+
             audio.onerror = (e) => {
                 console.error('Audio play failed:', e);
                 if (ws && ws.readyState === WebSocket.OPEN) {
