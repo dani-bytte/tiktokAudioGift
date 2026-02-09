@@ -84,6 +84,8 @@ function App() {
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | 'none'>('none');
   const [audioFileNames, setAudioFileNames] = useState<Record<string, string>>({});
+  const [selectedTestGiftId, setSelectedTestGiftId] = useState('');
+  const [testGiftDropdownOpen, setTestGiftDropdownOpen] = useState(false);
 
   
   const addLog = useCallback((type: LogEntry['type'], message: string) => {
@@ -110,6 +112,20 @@ function App() {
       console.error('Failed to load settings:', error);
     }
   }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest('[data-dropdown="test-gift"]')) {
+        setTestGiftDropdownOpen(false);
+      }
+    };
+
+    if (testGiftDropdownOpen) {
+      document.addEventListener('click', handleClickOutside);
+      return () => document.removeEventListener('click', handleClickOutside);
+    }
+  }, [testGiftDropdownOpen]);
 
   useEffect(() => {
     
@@ -329,14 +345,14 @@ function App() {
 
   
   const handleTestGift = async () => {
-    const firstMapping = Object.values(giftMappings)[0];
-    if (firstMapping) {
-      await window.electronAPI.triggerTestGift(firstMapping.giftName);
-      toast.success(`Testing: ${firstMapping.giftName}`);
-      addLog('info', `Test gift triggered: ${firstMapping.giftName}`);
+    const selectedMapping = giftMappings[selectedTestGiftId];
+    if (selectedMapping) {
+      await window.electronAPI.triggerTestGift(selectedMapping.giftName);
+      toast.success(`Testing: ${selectedMapping.giftName}`);
+      addLog('info', `Test gift triggered: ${selectedMapping.giftName}`);
     } else {
-      toast.error('No audio mappings to test');
-      addLog('error', 'No audio mappings to test');
+      toast.error('Please select a gift to test');
+      addLog('error', 'No gift selected for testing');
     }
   };
 
@@ -455,12 +471,71 @@ function App() {
 
           
           <Card>
-            <CardHeader className="pb-3">
+            <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
                 <span>🧪</span> Testing
               </CardTitle>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-3">
+              <div className="relative" data-dropdown="test-gift">
+                <label htmlFor="test-gift-select" className="block text-sm font-medium mb-2 text-foreground">
+                  Select Gift
+                </label>
+                <button
+                  onClick={() => setTestGiftDropdownOpen(!testGiftDropdownOpen)}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground shadow-xs transition-colors hover:border-input/80 focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring flex items-center justify-between"
+                >
+                  <div className="flex items-center gap-2">
+                    {selectedTestGiftId ? (
+                      <>
+                        {(() => {
+                          const gift = availableGifts.find(g => g.id.toString() === selectedTestGiftId);
+                          return gift?.imageUrl ? (
+                            <img src={gift.imageUrl} alt={giftMappings[selectedTestGiftId]?.giftName} className="w-5 h-5 object-contain" />
+                          ) : (
+                            <span className="text-lg">🎁</span>
+                          );
+                        })()}
+                        <span>{giftMappings[selectedTestGiftId]?.giftName}</span>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">Choose a gift...</span>
+                    )}
+                  </div>
+                  <span className={`transition-transform ${testGiftDropdownOpen ? 'rotate-180' : ''}`}>▼</span>
+                </button>
+                
+                {testGiftDropdownOpen && (
+                  <div className="absolute top-full left-0 right-0 mt-1 bg-background border border-input rounded-md shadow-lg z-50 max-h-64 overflow-y-auto">
+                    {Object.entries(giftMappings).length === 0 ? (
+                      <div className="p-3 text-sm text-muted-foreground text-center">No gifts configured</div>
+                    ) : (
+                      Object.entries(giftMappings).map(([giftId, mapping]) => (
+                        <button
+                          key={giftId}
+                          onClick={() => {
+                            setSelectedTestGiftId(giftId);
+                            setTestGiftDropdownOpen(false);
+                          }}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors ${
+                            selectedTestGiftId === giftId ? 'bg-accent' : ''
+                          }`}
+                        >
+                          {(() => {
+                            const gift = availableGifts.find(g => g.id.toString() === giftId);
+                            return gift?.imageUrl ? (
+                              <img src={gift.imageUrl} alt={mapping.giftName} className="w-5 h-5 object-contain" />
+                            ) : (
+                              <span className="text-lg">🎁</span>
+                            );
+                          })()}
+                          <span>{mapping.giftName}</span>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
               <Button variant="outline" onClick={handleTestGift} className="w-full">
                 Simulate Gift Event
               </Button>
