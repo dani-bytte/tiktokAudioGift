@@ -364,15 +364,17 @@ app.whenReady().then(async () => {
   setupTikTokEvents();
   setupIpcHandlers();
 
-  
+  // Create window first for faster perceived startup
+  createWindow();
+
+  // Start services in background after window is visible
   const settings = storageService.getSettings();
   
   try {
     const libraryPath = audioLibraryService.ensureLibraryDir();
     await overlayServer.start(settings.overlayPort, libraryPath);
+    console.log('[Main] Overlay server started successfully');
   } catch (e) {
     console.error('Failed to start overlay server:', e);
   }
-
-  createWindow();
 });
