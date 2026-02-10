@@ -2,13 +2,13 @@ import Store from 'electron-store';
 
 export interface AudioFileEntry {
   path: string;
-  volume: number; 
+  volume: number;
 }
 
 export interface GiftAudioMapping {
   giftId: string;
   giftName: string;
-  audioPath?: string; 
+  audioPath?: string;
   audioFiles: AudioFileEntry[];
   enabled: boolean;
 }
@@ -28,8 +28,8 @@ export interface AppSettings {
   globalVolume: number;
   cachedGifts: CachedGift[];
   giftSortOrder: 'asc' | 'desc' | 'none';
-  audioFileNames: Record<string, string>; 
-  audioFileVolumes: Record<string, number>; 
+  audioFileNames: Record<string, string>;
+  audioFileVolumes: Record<string, number>;
 }
 
 const defaultSettings: AppSettings = {
@@ -56,33 +56,33 @@ class StorageService {
 
   getSettings(): AppSettings {
     const settings = {
-        lastUsername: this.store.get('lastUsername', ''),
-        giftAudioMappings: this.store.get('giftAudioMappings', {}),
-        overlayPort: this.store.get('overlayPort', 3847),
-        showGiftAnimation: this.store.get('showGiftAnimation', true),
-        globalVolume: this.store.get('globalVolume', 1.0),
-        cachedGifts: this.store.get('cachedGifts', []),
-        giftSortOrder: this.store.get('giftSortOrder', 'none'),
-        audioFileNames: this.store.get('audioFileNames', {}),
-        audioFileVolumes: this.store.get('audioFileVolumes', {}),
+      lastUsername: this.store.get('lastUsername', ''),
+      giftAudioMappings: this.store.get('giftAudioMappings', {}),
+      overlayPort: this.store.get('overlayPort', 3847),
+      showGiftAnimation: this.store.get('showGiftAnimation', true),
+      globalVolume: this.store.get('globalVolume', 1.0),
+      cachedGifts: this.store.get('cachedGifts', []),
+      giftSortOrder: this.store.get('giftSortOrder', 'none'),
+      audioFileNames: this.store.get('audioFileNames', {}),
+      audioFileVolumes: this.store.get('audioFileVolumes', {}),
     };
 
-    
+
     for (const key in settings.giftAudioMappings) {
-        const mapping = settings.giftAudioMappings[key] as any;
-        if (!mapping.audioFiles) {
-            
-            mapping.audioFiles = mapping.audioPath 
-                ? [{ path: mapping.audioPath, volume: mapping.volume || 1.0 }] 
-                : [];
-        } else if (mapping.audioFiles.length > 0 && typeof mapping.audioFiles[0] === 'string') {
-            
-            const oldVolume = mapping.volume || 1.0;
-            mapping.audioFiles = (mapping.audioFiles as string[]).map((path: string) => ({ 
-                path, 
-                volume: oldVolume 
-            }));
-        }
+      const mapping = settings.giftAudioMappings[key] as any;
+      if (!mapping.audioFiles) {
+
+        mapping.audioFiles = mapping.audioPath
+          ? [{ path: mapping.audioPath, volume: mapping.volume || 1.0 }]
+          : [];
+      } else if (mapping.audioFiles.length > 0 && typeof mapping.audioFiles[0] === 'string') {
+
+        const oldVolume = mapping.volume || 1.0;
+        mapping.audioFiles = (mapping.audioFiles as string[]).map((path: string) => ({
+          path,
+          volume: oldVolume
+        }));
+      }
     }
 
     return settings;
@@ -101,13 +101,13 @@ class StorageService {
 
   setAudioVolume(id: string, volume: number): void {
     const volumes = this.store.get('audioFileVolumes', {});
-    volumes[id] = Math.max(0, Math.min(1, volume)); 
+    volumes[id] = Math.max(0, Math.min(1, volume));
     this.store.set('audioFileVolumes', volumes);
   }
 
   getAudioVolume(id: string): number {
     const volumes = this.store.get('audioFileVolumes', {});
-    return volumes[id] ?? 1.0; 
+    return volumes[id] ?? 1.0;
   }
 
   setLastUsername(username: string): void {
@@ -168,14 +168,30 @@ class StorageService {
 
   getGiftAudio(giftId: string): GiftAudioMapping | undefined {
     const mappings = this.store.get('giftAudioMappings', {});
-    return mappings[giftId];
+    const mapping = mappings[giftId] as any;
+    if (!mapping) return undefined;
+
+    // Apply the same migration as getSettings
+    if (!mapping.audioFiles) {
+      mapping.audioFiles = mapping.audioPath
+        ? [{ path: mapping.audioPath, volume: mapping.volume || 1.0 }]
+        : [];
+    } else if (mapping.audioFiles.length > 0 && typeof mapping.audioFiles[0] === 'string') {
+      const oldVolume = mapping.volume || 1.0;
+      mapping.audioFiles = (mapping.audioFiles as string[]).map((path: string) => ({
+        path,
+        volume: oldVolume
+      }));
+    }
+
+    return mapping as GiftAudioMapping;
   }
 
   getAllGiftMappings(): Record<string, GiftAudioMapping> {
     return this.store.get('giftAudioMappings', {});
   }
 
-  
+
   setCachedGifts(gifts: CachedGift[]): void {
     this.store.set('cachedGifts', gifts);
   }

@@ -85,28 +85,50 @@ class OverlayServer extends EventEmitter {
         next();
     });
 
-    
+    // CORS headers - allow audio to be fetched from any origin
+    this.app.use((_req, res, next) => {
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Methods', 'GET');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, Range');
+        next();
+    });
+
+    // Content-Type map for audio files
+    const AUDIO_CONTENT_TYPES: Record<string, string> = {
+      '.mp3': 'audio/mpeg',
+      '.wav': 'audio/wav',
+      '.ogg': 'audio/ogg',
+      '.m4a': 'audio/mp4',
+      '.flac': 'audio/flac',
+    };
+
     this.app.get('/audio/:id', (req: Request, res: Response) => {
       const id = req.params.id as string;
       const audioPath = this.audioFiles.get(id);
       
       if (!audioPath) {
+        console.error(`[Overlay] Audio ID not found: ${id}`);
         return res.status(404).send('Audio not found');
       }
 
-      
-      
       const normalizedPath = path.normalize(audioPath);
+      const ext = path.extname(normalizedPath).toLowerCase();
       
-      
-      if (!/\.(mp3|wav|ogg|m4a|flac)$/i.test(normalizedPath)) {
+      if (!AUDIO_CONTENT_TYPES[ext]) {
         console.error(`[Overlay] Blocked access to non-audio file: ${normalizedPath}`);
         return res.status(403).send('Forbidden');
       }
 
+      // Set proper Content-Type header
+      res.setHeader('Content-Type', AUDIO_CONTENT_TYPES[ext]);
+      // Allow range requests for audio seeking
+      res.setHeader('Accept-Ranges', 'bytes');
+
+      console.log(`[Overlay] Serving audio: ${normalizedPath} (${ext})`);
+
       res.sendFile(normalizedPath, (err: Error | null) => {
         if (err) {
-          console.error('Failed to send audio file:', err);
+          console.error('[Overlay] Failed to send audio file:', err);
           if (!res.headersSent) {
              res.status(404).send('Audio file not found');
           }
@@ -125,9 +147,13 @@ class OverlayServer extends EventEmitter {
       }));
     }
 
-    
     this.app.get('/', (_req: Request, res: Response) => {
       res.send(OVERLAY_HTML);
+    });
+
+    // Debug diagnostic page for troubleshooting audio on other PCs
+    this.app.get('/debug', (_req: Request, res: Response) => {
+      res.send(DEBUG_HTML);
     });
 
     
@@ -582,6 +608,216 @@ const OVERLAY_HTML = `<!DOCTYPE html>
         }
 
         connect();
+    </script>
+</body>
+</html>`;
+
+
+const DEBUG_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Debug - TikTok Audio Gift</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #0f0f1a;
+            color: #e2e8f0;
+            font-family: 'Segoe UI', sans-serif;
+            padding: 24px;
+        }
+        h1 { color: #a78bfa; margin-bottom: 8px; font-size: 24px; }
+        h2 { color: #818cf8; margin: 20px 0 10px; font-size: 18px; }
+        .subtitle { color: #64748b; font-size: 13px; margin-bottom: 20px; }
+        .card {
+            background: #1e1e2e;
+            border: 1px solid #2d2d44;
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; }
+        .label { color: #94a3b8; }
+        .value { font-weight: 600; }
+        .ok { color: #22c55e; }
+        .warn { color: #f59e0b; }
+        .err { color: #ef4444; }
+        button {
+            background: #6366f1;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 4px;
+        }
+        button:hover { background: #4f46e5; }
+        button:disabled { background: #374151; cursor: not-allowed; }
+        #logs {
+            background: #0a0a14;
+            border: 1px solid #2d2d44;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .log-info { color: #60a5fa; }
+        .log-ok { color: #22c55e; }
+        .log-err { color: #ef4444; }
+        .log-warn { color: #f59e0b; }
+    </style>
+</head>
+<body>
+    <h1>🔧 Audio Debug</h1>
+    <p class="subtitle">Diagnostic page for troubleshooting audio playback issues</p>
+
+    <h2>System Info</h2>
+    <div class="card">
+        <div class="row"><span class="label">User Agent</span><span class="value" id="ua"></span></div>
+        <div class="row"><span class="label">AudioContext</span><span class="value" id="actx-support"></span></div>
+        <div class="row"><span class="label">AudioContext State</span><span class="value" id="actx-state"></span></div>
+        <div class="row"><span class="label">WebSocket</span><span class="value" id="ws-status"></span></div>
+        <div class="row"><span class="label">Sample Rate</span><span class="value" id="sample-rate"></span></div>
+    </div>
+
+    <h2>Tests</h2>
+    <div class="card">
+        <button onclick="testAudioContext()">1. Test AudioContext</button>
+        <button onclick="testBeep()">2. Play Test Beep</button>
+        <button onclick="testFetchAudio()">3. Test Audio Fetch (needs audio in queue)</button>
+        <button onclick="testWs()">4. Test WebSocket</button>
+        <button id="btn-clear" onclick="clearLogs()">Clear Logs</button>
+    </div>
+
+    <h2>Logs</h2>
+    <div id="logs"></div>
+
+    <script>
+        const logsEl = document.getElementById('logs');
+        let audioCtx = null;
+        let ws = null;
+
+        // Logging
+        function log(msg, type = 'info') {
+            const cls = type === 'ok' ? 'log-ok' : type === 'err' ? 'log-err' : type === 'warn' ? 'log-warn' : 'log-info';
+            const time = new Date().toLocaleTimeString();
+            logsEl.innerHTML += '<span class="' + cls + '">[' + time + '] ' + msg + '</span>\\n';
+            logsEl.scrollTop = logsEl.scrollHeight;
+        }
+
+        function clearLogs() { logsEl.innerHTML = ''; }
+
+        // System info
+        document.getElementById('ua').textContent = navigator.userAgent.substring(0, 80) + '...';
+
+        const hasAudioCtx = !!(window.AudioContext || window.webkitAudioContext);
+        const actxEl = document.getElementById('actx-support');
+        actxEl.textContent = hasAudioCtx ? 'Supported ✓' : 'NOT SUPPORTED ✗';
+        actxEl.className = 'value ' + (hasAudioCtx ? 'ok' : 'err');
+
+        function updateActxState() {
+            const el = document.getElementById('actx-state');
+            if (!audioCtx) { el.textContent = 'Not created'; el.className = 'value warn'; return; }
+            el.textContent = audioCtx.state;
+            el.className = 'value ' + (audioCtx.state === 'running' ? 'ok' : audioCtx.state === 'suspended' ? 'warn' : 'err');
+            document.getElementById('sample-rate').textContent = audioCtx.sampleRate + ' Hz';
+        }
+
+        // Test 1: AudioContext
+        function testAudioContext() {
+            log('Testing AudioContext...');
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                log('AudioContext created. State: ' + audioCtx.state, audioCtx.state === 'running' ? 'ok' : 'warn');
+                
+                audioCtx.resume().then(() => {
+                    log('AudioContext.resume() succeeded. State: ' + audioCtx.state, 'ok');
+                    updateActxState();
+                }).catch(e => {
+                    log('AudioContext.resume() FAILED: ' + e.message, 'err');
+                    updateActxState();
+                });
+                updateActxState();
+            } catch (e) {
+                log('AudioContext creation FAILED: ' + e.message, 'err');
+            }
+        }
+
+        // Test 2: Play beep
+        function testBeep() {
+            log('Playing test beep...');
+            if (!audioCtx) {
+                log('Creating AudioContext first...', 'warn');
+                testAudioContext();
+            }
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.frequency.value = 440;
+                gain.gain.value = 0.3;
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.3);
+                osc.onended = () => log('Beep finished. If you heard it, audio is working!', 'ok');
+                log('Beep started (440Hz, 0.3s)', 'ok');
+            } catch (e) {
+                log('Beep FAILED: ' + e.message, 'err');
+            }
+        }
+
+        // Test 3: Fetch audio from server
+        function testFetchAudio() {
+            log('Testing audio fetch from server...');
+            const testUrl = window.location.origin + '/audio/test';
+            fetch(testUrl).then(r => {
+                log('Fetch response: ' + r.status + ' ' + r.statusText + ' Content-Type: ' + r.headers.get('Content-Type'), r.ok ? 'ok' : 'warn');
+                if (r.status === 404) {
+                    log('This is expected if no audio has been queued yet. Try triggering a gift first.', 'warn');
+                }
+            }).catch(e => {
+                log('Fetch FAILED: ' + e.message, 'err');
+            });
+
+            // Also test with Audio element
+            log('Testing new Audio() playback...');
+            const audio = new Audio();
+            audio.onerror = (e) => log('Audio element error: ' + (audio.error ? audio.error.message : 'unknown'), 'err');
+            audio.oncanplay = () => log('Audio canplay event fired', 'ok');
+            log('Audio element created. canPlayType mp3: "' + audio.canPlayType('audio/mpeg') + '", wav: "' + audio.canPlayType('audio/wav') + '", ogg: "' + audio.canPlayType('audio/ogg') + '"');
+        }
+
+        // Test 4: WebSocket
+        function testWs() {
+            log('Testing WebSocket connection...');
+            try {
+                const testWs = new WebSocket('ws://' + window.location.host);
+                testWs.onopen = () => {
+                    log('WebSocket connected!', 'ok');
+                    document.getElementById('ws-status').textContent = 'Connected ✓';
+                    document.getElementById('ws-status').className = 'value ok';
+                    testWs.close();
+                };
+                testWs.onerror = () => {
+                    log('WebSocket connection FAILED', 'err');
+                    document.getElementById('ws-status').textContent = 'Failed ✗';
+                    document.getElementById('ws-status').className = 'value err';
+                };
+            } catch (e) {
+                log('WebSocket test FAILED: ' + e.message, 'err');
+            }
+        }
+
+        // Auto-run diagnostics
+        log('Debug page loaded. Running initial diagnostics...', 'info');
+        testAudioContext();
+        setTimeout(testWs, 500);
     </script>
 </body>
 </html>`;

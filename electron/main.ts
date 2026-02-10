@@ -35,10 +35,10 @@ function createWindow() {
     backgroundColor: '#0f0f1a',
   });
 
-  
+
   Menu.setApplicationMenu(null);
 
-  
+
   win.webContents.on('did-finish-load', () => {
     win?.webContents.send('main-process-ready');
   });
@@ -76,32 +76,32 @@ function setupTikTokEvents() {
     safeSend('tiktok:error', error);
   });
 
-  
+
   tiktokService.on('giftFinal', (event: GiftEvent) => {
-    
-    const giftName = event.giftName === 'Gift' 
+
+    const giftName = event.giftName === 'Gift'
       ? storageService.getGiftName(event.giftId) || event.giftName
       : event.giftName;
-    
+
     const enrichedEvent = { ...event, giftName };
-    
-    
+
+
     safeSend('tiktok:gift', enrichedEvent);
 
-    
-    
+
+
     const mapping = storageService.getGiftAudio(event.giftId);
-    
-    
+
+
     if (mapping && mapping.enabled) {
-      
-      let audioPathToPlay: string | undefined = mapping.audioPath; 
-      
+
+      let audioPathToPlay: string | undefined = mapping.audioPath;
+
       if (mapping.audioFiles && mapping.audioFiles.length > 0) {
         const randomIndex = Math.floor(Math.random() * mapping.audioFiles.length);
         const selectedAudio = mapping.audioFiles[randomIndex];
         console.log(`[Audio] Selecting random audio: index ${randomIndex} of ${mapping.audioFiles.length} files`);
-        
+
         if (typeof selectedAudio === 'string') {
           audioPathToPlay = selectedAudio;
         } else {
@@ -112,21 +112,21 @@ function setupTikTokEvents() {
       if (audioPathToPlay) {
         const settings = storageService.getSettings();
         const globalVolume = settings.globalVolume;
-        
-        
+
+
         const filename = audioPathToPlay.split(/[/\\]/).pop() || '';
         const audioId = filename.replace(/\.[^/.]+$/, "");
         const audioVolume = storageService.getAudioVolume(audioId);
         const audioDuration = storageService.getAudioDuration(audioId) || 0;
-        
+
         console.log(`[Audio] File: ${filename}, ID: ${audioId}, Audio Volume: ${audioVolume}, Global: ${globalVolume}`);
-        
+
         const finalVolume = audioVolume * globalVolume;
-        
-        
-        
+
+
+
         const repeatCount = Math.min(event.giftCount, 20);
-        const delayMs = 250; 
+        const delayMs = 250;
 
         console.log(`[Audio] Playing "${giftName}" x${repeatCount} (Original count: ${event.giftCount}) - File: ${audioPathToPlay} @ ${Math.round(audioVolume * 100)}% vol`);
 
@@ -134,42 +134,42 @@ function setupTikTokEvents() {
         overlayServer.playAudio(event.giftId, giftName, event.nickname, audioPathToPlay, finalVolume, audioDuration);
         win?.webContents.send('audio:played', { giftId: event.giftId, giftName });
 
-        
+
         if (repeatCount > 1) {
-            let played = 1;
-            const interval = setInterval(() => {
-                if (played >= repeatCount) {
-                    clearInterval(interval);
-                    return;
-                }
-                
-                
-                let nextAudioPath = audioPathToPlay!;
-                let nextVolume = finalVolume;
-                
-                if (mapping.audioFiles && mapping.audioFiles.length > 1) {
-                    const nextRandomIndex = Math.floor(Math.random() * mapping.audioFiles.length);
-                    const nextAudio = mapping.audioFiles[nextRandomIndex];
-                    if (typeof nextAudio === 'string') {
-                        nextAudioPath = nextAudio;
-                    } else {
-                        nextAudioPath = nextAudio.path;
-                    }
-                    
-                    const nextFilename = nextAudioPath.split(/[/\\]/).pop() || '';
-                    const nextAudioId = nextFilename.replace(/\.[^/.]+$/, "");
-                    const nextAudioVolume = storageService.getAudioVolume(nextAudioId);
-                    nextVolume = nextAudioVolume * globalVolume;
-                }
-                
-                const nextFilename = nextAudioPath.split(/[/\\]/).pop() || '';
-                const nextAudioIdForDuration = nextFilename.replace(/\.[^/.]+$/, "");
-                const nextDuration = storageService.getAudioDuration(nextAudioIdForDuration) || 0;
-                
-                console.log(`[Audio] Playing repetition ${played + 1}/${repeatCount} for ${giftName} - File: ${nextAudioPath.split(/[/\\]/).pop()}`);
-                overlayServer.playAudio(event.giftId, giftName, event.nickname, nextAudioPath, nextVolume, nextDuration);
-                played++;
-            }, delayMs);
+          let played = 1;
+          const interval = setInterval(() => {
+            if (played >= repeatCount) {
+              clearInterval(interval);
+              return;
+            }
+
+
+            let nextAudioPath = audioPathToPlay!;
+            let nextVolume = finalVolume;
+
+            if (mapping.audioFiles && mapping.audioFiles.length > 1) {
+              const nextRandomIndex = Math.floor(Math.random() * mapping.audioFiles.length);
+              const nextAudio = mapping.audioFiles[nextRandomIndex];
+              if (typeof nextAudio === 'string') {
+                nextAudioPath = nextAudio;
+              } else {
+                nextAudioPath = nextAudio.path;
+              }
+
+              const nextFilename = nextAudioPath.split(/[/\\]/).pop() || '';
+              const nextAudioId = nextFilename.replace(/\.[^/.]+$/, "");
+              const nextAudioVolume = storageService.getAudioVolume(nextAudioId);
+              nextVolume = nextAudioVolume * globalVolume;
+            }
+
+            const nextFilename = nextAudioPath.split(/[/\\]/).pop() || '';
+            const nextAudioIdForDuration = nextFilename.replace(/\.[^/.]+$/, "");
+            const nextDuration = storageService.getAudioDuration(nextAudioIdForDuration) || 0;
+
+            console.log(`[Audio] Playing repetition ${played + 1}/${repeatCount} for ${giftName} - File: ${nextAudioPath.split(/[/\\]/).pop()}`);
+            overlayServer.playAudio(event.giftId, giftName, event.nickname, nextAudioPath, nextVolume, nextDuration);
+            played++;
+          }, delayMs);
         }
       }
     }
@@ -190,7 +190,7 @@ function setupTikTokEvents() {
 
 
 function setupIpcHandlers() {
-  
+
   ipcMain.handle('settings:get', () => {
     return storageService.getSettings();
   });
@@ -208,7 +208,7 @@ function setupIpcHandlers() {
     return true;
   });
 
-  
+
   ipcMain.handle('audioLibrary:import', async () => {
     return await audioLibraryService.importFile();
   });
@@ -231,7 +231,7 @@ function setupIpcHandlers() {
     return true;
   });
 
-  
+
   ipcMain.handle('tiktok:connect', async (_, username: string) => {
     if (!username || typeof username !== 'string') throw new Error('Invalid username');
 
@@ -249,13 +249,13 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle('tiktok:fetchGifts', async () => {
-    
+
     const cachedGifts = storageService.getCachedGifts();
     if (cachedGifts.length > 0) {
       return cachedGifts;
     }
-    
-    
+
+
     const rawGifts = await tiktokService.fetchAvailableGifts();
     const cachedData = rawGifts.map((g: any) => ({
       id: g.id,
@@ -276,7 +276,7 @@ function setupIpcHandlers() {
     return true;
   });
 
-  
+
   ipcMain.handle('audio:setMapping', (_, mapping) => {
     storageService.setGiftAudio(mapping);
     return true;
@@ -303,7 +303,7 @@ function setupIpcHandlers() {
     return result.canceled ? null : result.filePaths[0];
   });
 
-  
+
   ipcMain.handle('overlay:getUrl', () => {
     return overlayServer.getUrl();
   });
@@ -312,17 +312,17 @@ function setupIpcHandlers() {
     return overlayServer.getConnectedCount();
   });
 
-  
+
   ipcMain.handle('test:triggerGift', (_, giftName: string) => {
     const mappings = storageService.getAllGiftMappings();
-    
-    
+
+
     for (const mapping of Object.values(mappings)) {
-      if (mapping.giftName.toLowerCase() === giftName.toLowerCase() && mapping.enabled && mapping.audioPath) {
-        
-        
-        const count = 3; 
-        
+      if (mapping.giftName.toLowerCase() === giftName.toLowerCase() && mapping.enabled && (mapping.audioPath || (mapping.audioFiles && mapping.audioFiles.length > 0))) {
+
+
+        const count = 3;
+
         const mockEvent: GiftEvent = {
           userId: 'test-user',
           username: 'test_user',
@@ -369,7 +369,7 @@ app.whenReady().then(async () => {
 
   // Start services in background after window is visible
   const settings = storageService.getSettings();
-  
+
   try {
     const libraryPath = audioLibraryService.ensureLibraryDir();
     await overlayServer.start(settings.overlayPort, libraryPath);
