@@ -5,309 +5,309 @@ import { EventEmitter } from 'events';
 import path from 'path';
 
 export interface PlayAudioMessage {
-  type: 'play-audio';
-  data: {
-    audioUrl: string;
-    volume: number;
-    giftName: string;
-    username: string;
-    giftId: string;
-  };
+    type: 'play-audio';
+    data: {
+        audioUrl: string;
+        volume: number;
+        giftName: string;
+        username: string;
+        giftId: string;
+    };
 }
 
 export interface OverlayMessage {
-  type: string;
-  data?: any;
+    type: string;
+    data?: any;
 }
 
 class OverlayServer extends EventEmitter {
-  private app = express();
-  private server = createServer(this.app);
-  private wss: WebSocketServer | null = null;
-  private clients: Set<WebSocket> = new Set();
-  private port: number = 3847;
-  private isRunning: boolean = false;
-  // Map of audio ID to absolute file path
-  private audioFiles: Map<string, string> = new Map();
-  // Track queue size and progress on server side
-  private queueSize: number = 0;
-  private totalInBatch: number = 0;
-  private currentPlaying: number = 0;
-  // Track audio durations for time estimation
-  private totalDurationPlayed: number = 0;
-  private audioCount: number = 0;
-  // Track pending audio durations for estimated time
-  private pendingDurations: number[] = [];
+    private app = express();
+    private server = createServer(this.app);
+    private wss: WebSocketServer | null = null;
+    private clients: Set<WebSocket> = new Set();
+    private port: number = 3847;
+    private isRunning: boolean = false;
+    // Map of audio ID to absolute file path
+    private audioFiles: Map<string, string> = new Map();
+    // Track queue size and progress on server side
+    private queueSize: number = 0;
+    private totalInBatch: number = 0;
+    private currentPlaying: number = 0;
+    // Track audio durations for time estimation
+    private totalDurationPlayed: number = 0;
+    private audioCount: number = 0;
+    // Track pending audio durations for estimated time
+    private pendingDurations: number[] = [];
 
-  
-  registerAudioFile(audioPath: string): string {
-    
-    if (!/\.(mp3|wav|ogg|m4a|flac)$/i.test(audioPath)) {
-        console.error(`[Overlay] Blocked attempt to register non-audio file: ${audioPath}`);
-        return '';
-    }
 
-    const id = Buffer.from(audioPath).toString('base64url');
-    this.audioFiles.set(id, audioPath);
-    return `/audio/${id}`;
-  }
+    registerAudioFile(audioPath: string): string {
 
-  async start(port: number = 3847, libraryPath?: string): Promise<void> {
-    if (this.isRunning) {
-      return;
-    }
-
-    this.port = port;
-
-    
-    const rateLimit = new Map<string, { count: number, resetTime: number }>();
-    const WINDOW_MS = 10000;
-    const MAX_REQUESTS = 100;
-
-    this.app.use((req, res, next) => {
-        const ip = req.ip || req.socket.remoteAddress || 'unknown';
-        const now = Date.now();
-        const record = rateLimit.get(ip);
-
-        
-        if (!record || now > record.resetTime) {
-            rateLimit.set(ip, { count: 1, resetTime: now + WINDOW_MS });
-            return next();
+        if (!/\.(mp3|wav|ogg|m4a|flac)$/i.test(audioPath)) {
+            console.error(`[Overlay] Blocked attempt to register non-audio file: ${audioPath}`);
+            return '';
         }
 
-        
-        record.count++;
-        if (record.count > MAX_REQUESTS) {
-            console.warn(`[Overlay] Rate limit exceeded for IP ${ip}`);
-            return res.status(429).send('Too Many Requests');
-        }
-
-        next();
-    });
-
-    // CORS headers - allow audio to be fetched from any origin
-    this.app.use((_req, res, next) => {
-        res.header('Access-Control-Allow-Origin', '*');
-        res.header('Access-Control-Allow-Methods', 'GET');
-        res.header('Access-Control-Allow-Headers', 'Content-Type, Range');
-        next();
-    });
-
-    // Content-Type map for audio files
-    const AUDIO_CONTENT_TYPES: Record<string, string> = {
-      '.mp3': 'audio/mpeg',
-      '.wav': 'audio/wav',
-      '.ogg': 'audio/ogg',
-      '.m4a': 'audio/mp4',
-      '.flac': 'audio/flac',
-    };
-
-    this.app.get('/audio/:id', (req: Request, res: Response) => {
-      const id = req.params.id as string;
-      const audioPath = this.audioFiles.get(id);
-      
-      if (!audioPath) {
-        console.error(`[Overlay] Audio ID not found: ${id}`);
-        return res.status(404).send('Audio not found');
-      }
-
-      const normalizedPath = path.normalize(audioPath);
-      const ext = path.extname(normalizedPath).toLowerCase();
-      
-      if (!AUDIO_CONTENT_TYPES[ext]) {
-        console.error(`[Overlay] Blocked access to non-audio file: ${normalizedPath}`);
-        return res.status(403).send('Forbidden');
-      }
-
-      // Set proper Content-Type header
-      res.setHeader('Content-Type', AUDIO_CONTENT_TYPES[ext]);
-      // Allow range requests for audio seeking
-      res.setHeader('Accept-Ranges', 'bytes');
-
-      console.log(`[Overlay] Serving audio: ${normalizedPath} (${ext})`);
-
-      res.sendFile(normalizedPath, (err: Error | null) => {
-        if (err) {
-          console.error('[Overlay] Failed to send audio file:', err);
-          if (!res.headersSent) {
-             res.status(404).send('Audio file not found');
-          }
-        }
-      });
-    });
-
-    
-    if (libraryPath) {
-      console.log('Serving audio library from:', libraryPath);
-      
-      this.app.use('/library', express.static(libraryPath, {
-        dotfiles: 'deny',
-        index: false,
-        extensions: ['mp3', 'wav', 'ogg', 'm4a', 'flac'],
-      }));
+        const id = Buffer.from(audioPath).toString('base64url');
+        this.audioFiles.set(id, audioPath);
+        return `/audio/${id}`;
     }
 
-    this.app.get('/', (_req: Request, res: Response) => {
-      res.send(OVERLAY_HTML);
-    });
+    async start(port: number = 3847, libraryPath?: string): Promise<void> {
+        if (this.isRunning) {
+            return;
+        }
 
-    // Debug diagnostic page for troubleshooting audio on other PCs
-    this.app.get('/debug', (_req: Request, res: Response) => {
-      res.send(DEBUG_HTML);
-    });
+        this.port = port;
 
-    
-    this.wss = new WebSocketServer({ server: this.server });
 
-    this.wss.on('connection', (ws) => {
-      console.log('Overlay client connected');
-      this.clients.add(ws);
-      this.emit('clientConnected');
+        const rateLimit = new Map<string, { count: number, resetTime: number }>();
+        const WINDOW_MS = 10000;
+        const MAX_REQUESTS = 100;
 
-      
-      ws.send(JSON.stringify({ type: 'connected' }));
+        this.app.use((req, res, next) => {
+            const ip = req.ip || req.socket.remoteAddress || 'unknown';
+            const now = Date.now();
+            const record = rateLimit.get(ip);
 
-      ws.on('close', () => {
-        console.log('Overlay client disconnected');
-        this.clients.delete(ws);
-        this.emit('clientDisconnected');
-      });
 
-      ws.on('message', (data) => {
-        try {
-          const msg = JSON.parse(data.toString());
-          // Handle queue updates from client
-          if (msg.type === 'audio-ended') {
-            // Track duration if provided
-            if (msg.duration && typeof msg.duration === 'number') {
-              this.totalDurationPlayed += msg.duration;
-              this.audioCount++;
+            if (!record || now > record.resetTime) {
+                rateLimit.set(ip, { count: 1, resetTime: now + WINDOW_MS });
+                return next();
             }
-            // Remove first pending duration (FIFO)
-            if (this.pendingDurations.length > 0) {
-              this.pendingDurations.shift();
+
+
+            record.count++;
+            if (record.count > MAX_REQUESTS) {
+                console.warn(`[Overlay] Rate limit exceeded for IP ${ip}`);
+                return res.status(429).send('Too Many Requests');
             }
-            this.queueSize = Math.max(0, this.queueSize - 1);
-            this.currentPlaying++;
-            // Emit progress update
-            this.emit('queueProgress', {
-              current: this.currentPlaying,
-              total: this.totalInBatch,
-              remaining: this.queueSize
+
+            next();
+        });
+
+        // CORS headers - allow audio to be fetched from any origin
+        this.app.use((_req, res, next) => {
+            res.header('Access-Control-Allow-Origin', '*');
+            res.header('Access-Control-Allow-Methods', 'GET');
+            res.header('Access-Control-Allow-Headers', 'Content-Type, Range');
+            next();
+        });
+
+        // Content-Type map for audio files
+        const AUDIO_CONTENT_TYPES: Record<string, string> = {
+            '.mp3': 'audio/mpeg',
+            '.wav': 'audio/wav',
+            '.ogg': 'audio/ogg',
+            '.m4a': 'audio/mp4',
+            '.flac': 'audio/flac',
+        };
+
+        this.app.get('/audio/:id', (req: Request, res: Response) => {
+            const id = req.params.id as string;
+            const audioPath = this.audioFiles.get(id);
+
+            if (!audioPath) {
+                console.error(`[Overlay] Audio ID not found: ${id}`);
+                return res.status(404).send('Audio not found');
+            }
+
+            const normalizedPath = path.normalize(audioPath);
+            const ext = path.extname(normalizedPath).toLowerCase();
+
+            if (!AUDIO_CONTENT_TYPES[ext]) {
+                console.error(`[Overlay] Blocked access to non-audio file: ${normalizedPath}`);
+                return res.status(403).send('Forbidden');
+            }
+
+            // Set proper Content-Type header
+            res.setHeader('Content-Type', AUDIO_CONTENT_TYPES[ext]);
+            // Allow range requests for audio seeking
+            res.setHeader('Accept-Ranges', 'bytes');
+
+            console.log(`[Overlay] Serving audio: ${normalizedPath} (${ext})`);
+
+            res.sendFile(normalizedPath, (err: Error | null) => {
+                if (err) {
+                    console.error('[Overlay] Failed to send audio file:', err);
+                    if (!res.headersSent) {
+                        res.status(404).send('Audio file not found');
+                    }
+                }
             });
-            // Reset if queue is empty
-            if (this.queueSize === 0) {
-              this.currentPlaying = 0;
-              this.totalInBatch = 0;
-              // Reset duration tracking for next batch
-              this.totalDurationPlayed = 0;
-              this.audioCount = 0;
-              this.pendingDurations = [];
-            }
-          }
-        } catch (e) {
-          // Ignore parse errors
+        });
+
+
+        if (libraryPath) {
+            console.log('Serving audio library from:', libraryPath);
+
+            this.app.use('/library', express.static(libraryPath, {
+                dotfiles: 'deny',
+                index: false,
+                extensions: ['mp3', 'wav', 'ogg', 'm4a', 'flac'],
+            }));
         }
-      });
-      ws.on('error', (error) => { // This was misplaced, moved it here
-        console.error('WebSocket error:', error);
-        this.clients.delete(ws);
-      });
-    });
 
-    return new Promise((resolve, reject) => {
-      this.server.listen(port, '127.0.0.1', () => {
-        console.log(`Overlay server running on http://localhost:${port}`);
-        this.isRunning = true;
-        resolve();
-      });
+        this.app.get('/', (_req: Request, res: Response) => {
+            res.send(OVERLAY_HTML);
+        });
 
-      this.server.on('error', (error) => {
-        console.error('Server error:', error);
-        reject(error);
-      });
-    });
-  }
+        // Debug diagnostic page for troubleshooting audio on other PCs
+        this.app.get('/debug', (_req: Request, res: Response) => {
+            res.send(DEBUG_HTML);
+        });
 
-  stop(): void {
-    if (this.wss) {
-      this.wss.close();
-      this.wss = null;
+
+        this.wss = new WebSocketServer({ server: this.server });
+
+        this.wss.on('connection', (ws) => {
+            console.log('Overlay client connected');
+            this.clients.add(ws);
+            this.emit('clientConnected');
+
+
+            ws.send(JSON.stringify({ type: 'connected' }));
+
+            ws.on('close', () => {
+                console.log('Overlay client disconnected');
+                this.clients.delete(ws);
+                this.emit('clientDisconnected');
+            });
+
+            ws.on('message', (data) => {
+                try {
+                    const msg = JSON.parse(data.toString());
+                    // Handle queue updates from client
+                    if (msg.type === 'audio-ended') {
+                        // Track duration if provided
+                        if (msg.duration && typeof msg.duration === 'number') {
+                            this.totalDurationPlayed += msg.duration;
+                            this.audioCount++;
+                        }
+                        // Remove first pending duration (FIFO)
+                        if (this.pendingDurations.length > 0) {
+                            this.pendingDurations.shift();
+                        }
+                        this.queueSize = Math.max(0, this.queueSize - 1);
+                        this.currentPlaying++;
+                        // Emit progress update
+                        this.emit('queueProgress', {
+                            current: this.currentPlaying,
+                            total: this.totalInBatch,
+                            remaining: this.queueSize
+                        });
+                        // Reset if queue is empty
+                        if (this.queueSize === 0) {
+                            this.currentPlaying = 0;
+                            this.totalInBatch = 0;
+                            // Reset duration tracking for next batch
+                            this.totalDurationPlayed = 0;
+                            this.audioCount = 0;
+                            this.pendingDurations = [];
+                        }
+                    }
+                } catch (e) {
+                    // Ignore parse errors
+                }
+            });
+            ws.on('error', (error) => { // This was misplaced, moved it here
+                console.error('WebSocket error:', error);
+                this.clients.delete(ws);
+            });
+        });
+
+        return new Promise((resolve, reject) => {
+            this.server.listen(port, '127.0.0.1', () => {
+                console.log(`Overlay server running on http://lvh.me:${port}`);
+                this.isRunning = true;
+                resolve();
+            });
+
+            this.server.on('error', (error) => {
+                console.error('Server error:', error);
+                reject(error);
+            });
+        });
     }
-    this.server.close();
-    this.isRunning = false;
-    this.clients.clear();
-  }
 
-  getConnectedCount(): number {
-    return this.clients.size;
-  }
-
-  getUrl(): string {
-    return `http://localhost:${this.port}`;
-  }
-
-  broadcast(message: OverlayMessage): void {
-    const data = JSON.stringify(message);
-    this.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(data);
-      }
-    });
-  }
-
-  playAudio(giftId: string, giftName: string, username: string, audioPath: string, volume: number, duration: number = 0): void {
-    // Register the audio file and get a URL for it
-    const audioUrl = this.registerAudioFile(audioPath);
-    
-    const message: PlayAudioMessage = {
-      type: 'play-audio',
-      data: {
-        audioUrl,
-        volume,
-        giftName,
-        username,
-        giftId,
-      },
-    };
-    console.log('Broadcasting audio play:', audioUrl, 'volume:', volume, 'duration:', duration);
-    this.broadcast(message);
-    // Track batch totals for progress
-    // Only reset if queue was empty (starting new batch)
-    const wasEmpty = this.queueSize === 0;
-    this.queueSize++;
-    
-    // Track duration for time estimation
-    this.pendingDurations.push(duration);
-    
-    if (wasEmpty) {
-      // Starting a new batch
-      this.totalInBatch = 1;
-      this.currentPlaying = 0;
-    } else {
-      // Adding to existing batch - increment total
-      this.totalInBatch++;
+    stop(): void {
+        if (this.wss) {
+            this.wss.close();
+            this.wss = null;
+        }
+        this.server.close();
+        this.isRunning = false;
+        this.clients.clear();
     }
-  }
 
-  // Get current queue progress with time estimation
-  getQueueProgress(): { current: number; total: number; remaining: number; estimatedSeconds: number } {
-    // Calculate estimated time from pending durations
-    const estimatedSeconds = Math.round(this.pendingDurations.reduce((a, b) => a + b, 0));
-    return {
-      current: this.currentPlaying,
-      total: this.totalInBatch,
-      remaining: this.queueSize,
-      estimatedSeconds
-    };
-  }
+    getConnectedCount(): number {
+        return this.clients.size;
+    }
 
-  
-  clearQueue(): void {
-    this.broadcast({ type: 'clear-queue' });
-    this.queueSize = 0; // Reset server-side queue size
-    console.log('[Overlay] Queue cleared');
-  }
+    getUrl(): string {
+        return `http://lvh.me:${this.port}`;
+    }
+
+    broadcast(message: OverlayMessage): void {
+        const data = JSON.stringify(message);
+        this.clients.forEach((client) => {
+            if (client.readyState === WebSocket.OPEN) {
+                client.send(data);
+            }
+        });
+    }
+
+    playAudio(giftId: string, giftName: string, username: string, audioPath: string, volume: number, duration: number = 0): void {
+        // Register the audio file and get a URL for it
+        const audioUrl = this.registerAudioFile(audioPath);
+
+        const message: PlayAudioMessage = {
+            type: 'play-audio',
+            data: {
+                audioUrl,
+                volume,
+                giftName,
+                username,
+                giftId,
+            },
+        };
+        console.log('Broadcasting audio play:', audioUrl, 'volume:', volume, 'duration:', duration);
+        this.broadcast(message);
+        // Track batch totals for progress
+        // Only reset if queue was empty (starting new batch)
+        const wasEmpty = this.queueSize === 0;
+        this.queueSize++;
+
+        // Track duration for time estimation
+        this.pendingDurations.push(duration);
+
+        if (wasEmpty) {
+            // Starting a new batch
+            this.totalInBatch = 1;
+            this.currentPlaying = 0;
+        } else {
+            // Adding to existing batch - increment total
+            this.totalInBatch++;
+        }
+    }
+
+    // Get current queue progress with time estimation
+    getQueueProgress(): { current: number; total: number; remaining: number; estimatedSeconds: number } {
+        // Calculate estimated time from pending durations
+        const estimatedSeconds = Math.round(this.pendingDurations.reduce((a, b) => a + b, 0));
+        return {
+            current: this.currentPlaying,
+            total: this.totalInBatch,
+            remaining: this.queueSize,
+            estimatedSeconds
+        };
+    }
+
+
+    clearQueue(): void {
+        this.broadcast({ type: 'clear-queue' });
+        this.queueSize = 0; // Reset server-side queue size
+        console.log('[Overlay] Queue cleared');
+    }
 }
 
 export const overlayServer = new OverlayServer();

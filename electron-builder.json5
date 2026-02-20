@@ -4,6 +4,7 @@
   "appId": "com.tiktok.audiogift",
   "asar": true,
   "productName": "TikTok Audio Gift",
+  "compression": "normal",
   "directories": {
     "output": "release/${version}"
   },

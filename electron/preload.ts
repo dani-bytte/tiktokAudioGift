@@ -52,21 +52,22 @@ export interface AppSettings {
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
+const listenersMap = new WeakMap<Function, Function>();
 
 const electronAPI = {
-  
+
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),
 
   setGlobalVolume: (volume: number): Promise<boolean> => ipcRenderer.invoke('settings:setGlobalVolume', volume),
   setGiftSortOrder: (order: 'asc' | 'desc' | 'none'): Promise<boolean> => ipcRenderer.invoke('settings:setGiftSortOrder', order),
 
-  
+
   connect: (username: string): Promise<any> => ipcRenderer.invoke('tiktok:connect', username),
   disconnect: (): Promise<boolean> => ipcRenderer.invoke('tiktok:disconnect'),
   getStatus: (): Promise<ConnectionStatus> => ipcRenderer.invoke('tiktok:getStatus'),
   fetchGifts: (): Promise<any[]> => ipcRenderer.invoke('tiktok:fetchGifts'),
 
-  
+
   setAudioMapping: (mapping: GiftAudioMapping): Promise<boolean> => ipcRenderer.invoke('audio:setMapping', mapping),
   removeAudioMapping: (giftId: string): Promise<boolean> => ipcRenderer.invoke('audio:removeMapping', giftId),
   getAudioMappings: (): Promise<Record<string, GiftAudioMapping>> => ipcRenderer.invoke('audio:getMappings'),
@@ -74,22 +75,22 @@ const electronAPI = {
   renameAudioFile: (id: string, newName: string): Promise<boolean> => ipcRenderer.invoke('audioLibrary:rename', id, newName),
   setAudioVolume: (id: string, volume: number): Promise<boolean> => ipcRenderer.invoke('audioLibrary:setVolume', id, volume),
 
-  
+
   importAudioFile: (): Promise<any> => ipcRenderer.invoke('audioLibrary:import'),
   listAudioFiles: (): Promise<any[]> => ipcRenderer.invoke('audioLibrary:list'),
   deleteAudioFile: (filename: string): Promise<boolean> => ipcRenderer.invoke('audioLibrary:delete', filename),
 
-  
+
   getOverlayUrl: (): Promise<string> => ipcRenderer.invoke('overlay:getUrl'),
   getOverlayConnectedCount: (): Promise<number> => ipcRenderer.invoke('overlay:getConnectedCount'),
   getOverlayQueueSize: (): Promise<number> => ipcRenderer.invoke('overlay:getQueueSize'),
   getOverlayQueueProgress: (): Promise<{ current: number; total: number; remaining: number; estimatedSeconds: number }> => ipcRenderer.invoke('overlay:getQueueProgress'),
   clearOverlayQueue: (): Promise<boolean> => ipcRenderer.invoke('overlay:clearQueue'),
 
-  
+
   triggerTestGift: (giftName: string): Promise<boolean> => ipcRenderer.invoke('test:triggerGift', giftName),
 
-  
+
   on: (channel: string, callback: (...args: any[]) => void) => {
     const validChannels = [
       'tiktok:status',
@@ -104,11 +105,17 @@ const electronAPI = {
       'main-process-ready',
     ];
     if (validChannels.includes(channel)) {
-      ipcRenderer.on(channel, (_event, ...args) => callback(...args));
+      const subscription = (_event: any, ...args: any[]) => callback(...args);
+      listenersMap.set(callback, subscription);
+      ipcRenderer.on(channel, subscription);
     }
   },
   off: (channel: string, callback: (...args: any[]) => void) => {
-    ipcRenderer.removeListener(channel, callback);
+    const subscription = listenersMap.get(callback);
+    if (subscription) {
+      ipcRenderer.removeListener(channel, subscription as any);
+      listenersMap.delete(callback);
+    }
   },
 };
 
