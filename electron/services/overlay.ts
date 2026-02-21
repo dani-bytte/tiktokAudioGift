@@ -39,6 +39,13 @@ class OverlayServer extends EventEmitter {
     // Track pending audio durations for estimated time
     private pendingDurations: number[] = [];
 
+    // Timer State
+    private timerEnabled: boolean = false;
+    private timerInitialValue: number = 7200;
+    private timeLeft: number = 0;
+    private isTimerPaused: boolean = false;
+    private timerInterval: NodeJS.Timeout | null = null;
+
 
     registerAudioFile(audioPath: string): string {
 
@@ -213,6 +220,16 @@ class OverlayServer extends EventEmitter {
                 console.error('WebSocket error:', error);
                 this.clients.delete(ws);
             });
+
+            // Send current timer state to the new client specifically
+            ws.send(JSON.stringify({
+                type: 'timer-tick',
+                data: {
+                    timeLeft: this.timeLeft,
+                    isTimerPaused: this.isTimerPaused,
+                    timerEnabled: this.timerEnabled,
+                }
+            }));
         });
 
         return new Promise((resolve, reject) => {
@@ -254,6 +271,70 @@ class OverlayServer extends EventEmitter {
                 client.send(data);
             }
         });
+    }
+
+    private emitTimerTick() {
+        const tickData = {
+            timeLeft: this.timeLeft,
+            isTimerPaused: this.isTimerPaused,
+            timerEnabled: this.timerEnabled,
+        };
+        this.broadcast({ type: 'timer-tick', data: tickData });
+        this.emit('timer-tick', tickData);
+    }
+
+    private startTimerInterval() {
+        if (!this.timerInterval) {
+            this.timerInterval = setInterval(() => {
+                if (this.timerEnabled && this.timeLeft > 0 && !this.isTimerPaused) {
+                    this.timeLeft--;
+                    this.emitTimerTick();
+                }
+            }, 1000);
+        }
+    }
+
+    private stopTimerInterval() {
+        if (this.timerInterval) {
+            clearInterval(this.timerInterval);
+            this.timerInterval = null;
+        }
+    }
+
+    broadcastTimerState(enabled: boolean, initialValue: number): void {
+        this.timerEnabled = enabled;
+        this.timerInitialValue = initialValue;
+        if (this.timerEnabled && this.timeLeft <= 0) {
+            this.timeLeft = this.timerInitialValue;
+        }
+        if (this.timerEnabled) {
+            this.startTimerInterval();
+        } else {
+            this.stopTimerInterval();
+        }
+        this.emitTimerTick();
+    }
+
+    addTimerTime(seconds: number): void {
+        if (this.timerEnabled) {
+            if (this.timeLeft <= 0) {
+                this.timeLeft = seconds;
+            } else {
+                this.timeLeft += seconds;
+            }
+            this.emitTimerTick();
+        }
+    }
+
+    toggleTimerPause(): void {
+        this.isTimerPaused = !this.isTimerPaused;
+        this.emitTimerTick();
+    }
+
+    stopTimer(): void {
+        this.isTimerPaused = true;
+        this.timeLeft = this.timerInitialValue;
+        this.emitTimerTick();
     }
 
     playAudio(giftId: string, giftName: string, username: string, audioPath: string, volume: number, duration: number = 0): void {
@@ -324,21 +405,45 @@ const OVERLAY_HTML = `<!DOCTYPE html>
         body {
             background: transparent;
             overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
         }
-        #status {
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            padding: 5px 10px;
-            border-radius: 5px;
-            font-size: 12px;
-            background: rgba(0,0,0,0.5);
-            color: white;
+
+        /* Timer UI */
+        #timer-container {
             font-family: 'Segoe UI', sans-serif;
-            z-index: 100;
+            z-index: 90;
+            transition: opacity 0.3s ease, transform 0.3s ease;
         }
-        #status.connected { background: rgba(34, 197, 94, 0.8); }
-        #status.disconnected { background: rgba(239, 68, 68, 0.8); }
+        #timer-container.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: scale(0.9);
+        }
+        .timer-box {
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(4px);
+            border-radius: 8px;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .timer-icon {
+            font-size: 16px;
+        }
+        #timer-display {
+            color: #fff;
+            font-size: 72px; /* Aumentei o tamanho da fonte */
+            font-weight: bold;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 2px;
+            text-shadow: 0 4px 8px rgba(0,0,0,0.6);
+        }
 
         /* Audio enable overlay */
         #audio-enable-overlay {
@@ -388,7 +493,12 @@ const OVERLAY_HTML = `<!DOCTYPE html>
     </style>
 </head>
 <body>
-    <div id="status" class="disconnected">Disconnected</div>
+    <!-- Timer Overlay UI -->
+    <div id="timer-container" class="hidden">
+        <div class="timer-box">
+            <span id="timer-display">00:00:00</span>
+        </div>
+    </div>
 
     <!-- Click-to-enable audio overlay: user clicks once to unlock AudioContext -->
     <div id="audio-enable-overlay">
@@ -412,6 +522,37 @@ const OVERLAY_HTML = `<!DOCTYPE html>
         // AudioContext for unlocking autoplay
         let audioCtx = null;
         let audioUnlocked = false;
+
+        // Timer State
+        let timerEnabled = false;
+        let timeLeft = 0;
+        let isTimerPaused = false;
+        const timerContainer = document.getElementById('timer-container');
+        const timerDisplay = document.getElementById('timer-display');
+        
+        function formatTime(totalSeconds) {
+            const h = Math.floor(Math.max(totalSeconds, 0) / 3600);
+            const m = Math.floor((Math.max(totalSeconds, 0) % 3600) / 60);
+            const s = Math.floor(Math.max(totalSeconds, 0) % 60);
+            if (h > 0) {
+                return \`\${h.toString().padStart(2, '0')}:\${m.toString().padStart(2, '0')}:\${s.toString().padStart(2, '0')}\`;
+            }
+            return \`\${m.toString().padStart(2, '0')}:\${s.toString().padStart(2, '0')}\`;
+        }
+        
+        function updateTimerDisplay() {
+            if (timerEnabled && timeLeft > 0) {
+                timerContainer.classList.remove('hidden');
+            } else {
+                timerContainer.classList.add('hidden');
+            }
+            timerDisplay.textContent = formatTime(timeLeft);
+            if (isTimerPaused) {
+                timerDisplay.style.color = '#ffcc00'; // indicate paused state
+            } else {
+                timerDisplay.style.color = '#fff';
+            }
+        }
 
         // Try to create and resume AudioContext immediately
         // Some environments (like OBS with "Control audio via OBS") allow this without interaction
@@ -486,8 +627,6 @@ const OVERLAY_HTML = `<!DOCTYPE html>
             ws = new WebSocket('ws://' + window.location.host);
 
             ws.onopen = () => {
-                status.textContent = 'Connected';
-                status.className = 'connected';
                 if (reconnectInterval) {
                     clearInterval(reconnectInterval);
                     reconnectInterval = null;
@@ -495,8 +634,6 @@ const OVERLAY_HTML = `<!DOCTYPE html>
             };
 
             ws.onclose = () => {
-                status.textContent = 'Disconnected';
-                status.className = 'disconnected';
                 if (!reconnectInterval) {
                     reconnectInterval = setInterval(connect, 3000);
                 }
@@ -521,6 +658,11 @@ const OVERLAY_HTML = `<!DOCTYPE html>
                     volume: msg.data.volume
                 });
                 processQueue();
+            } else if (msg.type === 'timer-tick') {
+                timerEnabled = msg.data.timerEnabled;
+                timeLeft = msg.data.timeLeft;
+                isTimerPaused = msg.data.isTimerPaused;
+                updateTimerDisplay();
             } else if (msg.type === 'get-queue-size') {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({

@@ -37,6 +37,7 @@ export interface GiftAudioMapping {
   audioPath?: string;
   audioFiles: AudioFileEntry[];
   enabled: boolean;
+  customTimerAmount?: number;
 }
 
 export interface AppSettings {
@@ -48,6 +49,9 @@ export interface AppSettings {
   giftSortOrder: 'asc' | 'desc' | 'none';
   audioFileNames: Record<string, string>;
   audioFileVolumes: Record<string, number>;
+  timerEnabled: boolean;
+  timerInitialValue: number;
+  timerSecondsPerCoin: number;
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -60,7 +64,19 @@ const electronAPI = {
 
   setGlobalVolume: (volume: number): Promise<boolean> => ipcRenderer.invoke('settings:setGlobalVolume', volume),
   setGiftSortOrder: (order: 'asc' | 'desc' | 'none'): Promise<boolean> => ipcRenderer.invoke('settings:setGiftSortOrder', order),
+  setTimerEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('settings:setTimerEnabled', enabled),
+  setTimerInitialValue: (value: number): Promise<boolean> => ipcRenderer.invoke('settings:setTimerInitialValue', value),
+  setTimerSecondsPerCoin: (seconds: number): Promise<boolean> => ipcRenderer.invoke('settings:setTimerSecondsPerCoin', seconds),
 
+  toggleTimerPause: (): Promise<boolean> => ipcRenderer.invoke('timer:togglePause'),
+  stopTimer: (): Promise<boolean> => ipcRenderer.invoke('timer:stop'),
+  addManualTimer: (seconds: number): Promise<boolean> => ipcRenderer.invoke('timer:addManual', seconds),
+  onTimerTick: (callback: (data: any) => void) => {
+    ipcRenderer.on('timer:tick', (_event, data) => callback(data));
+  },
+  offTimerTick: (callback: (data: any) => void) => {
+    ipcRenderer.removeListener('timer:tick', callback);
+  },
 
   connect: (username: string): Promise<any> => ipcRenderer.invoke('tiktok:connect', username),
   disconnect: (): Promise<boolean> => ipcRenderer.invoke('tiktok:disconnect'),

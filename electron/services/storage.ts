@@ -11,6 +11,7 @@ export interface GiftAudioMapping {
   audioPath?: string;
   audioFiles: AudioFileEntry[];
   enabled: boolean;
+  customTimerAmount?: number;
 }
 
 export interface CachedGift {
@@ -30,6 +31,9 @@ export interface AppSettings {
   giftSortOrder: 'asc' | 'desc' | 'none';
   audioFileNames: Record<string, string>;
   audioFileVolumes: Record<string, number>;
+  timerEnabled: boolean;
+  timerInitialValue: number;
+  timerSecondsPerCoin: number;
 }
 
 const defaultSettings: AppSettings = {
@@ -42,6 +46,9 @@ const defaultSettings: AppSettings = {
   giftSortOrder: 'none',
   audioFileNames: {},
   audioFileVolumes: {},
+  timerEnabled: false,
+  timerInitialValue: 7200, // 2 hours in seconds
+  timerSecondsPerCoin: 30,
 };
 
 class StorageService {
@@ -65,6 +72,9 @@ class StorageService {
       giftSortOrder: this.store.get('giftSortOrder', 'none'),
       audioFileNames: this.store.get('audioFileNames', {}),
       audioFileVolumes: this.store.get('audioFileVolumes', {}),
+      timerEnabled: this.store.get('timerEnabled', false),
+      timerInitialValue: this.store.get('timerInitialValue', 7200),
+      timerSecondsPerCoin: this.store.get('timerSecondsPerCoin', 30),
     };
 
 
@@ -126,6 +136,18 @@ class StorageService {
 
   setGiftSortOrder(order: 'asc' | 'desc' | 'none'): void {
     this.store.set('giftSortOrder', order);
+  }
+
+  setTimerEnabled(enabled: boolean): void {
+    this.store.set('timerEnabled', enabled);
+  }
+
+  setTimerInitialValue(value: number): void {
+    this.store.set('timerInitialValue', value);
+  }
+
+  setTimerSecondsPerCoin(seconds: number): void {
+    this.store.set('timerSecondsPerCoin', seconds);
   }
 
   setGiftAudio(mapping: GiftAudioMapping): void {

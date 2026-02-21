@@ -21,10 +21,10 @@ let win: BrowserWindow | null;
 
 function createWindow() {
   win = new BrowserWindow({
-    width: 1280,
+    width: 1450,
     height: 800,
-    minWidth: 1000,
-    minHeight: 600,
+    minWidth: 1450,
+    minHeight: 760,
     icon: path.join(process.env.VITE_PUBLIC, 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
@@ -88,9 +88,25 @@ function setupTikTokEvents() {
 
     safeSend('tiktok:gift', enrichedEvent);
 
-
-
     const mapping = storageService.getGiftAudio(event.giftId);
+
+    const settings = storageService.getSettings();
+    if (settings.timerEnabled) {
+      // Check if gift has a custom override amount (stored in minutes)
+      if (mapping && mapping.customTimerAmount !== undefined && mapping.customTimerAmount > 0) {
+        const secondsToAdd = Number(mapping.customTimerAmount) * 60 * event.giftCount;
+        overlayServer.addTimerTime(secondsToAdd);
+        console.log(`[Timer] Added ${secondsToAdd}s (Custom Override of ${mapping.customTimerAmount}m) for ${event.giftName} x${event.giftCount}`);
+      } else {
+        // Fallback to global coin multiplier
+        const coins = event.giftCount * event.diamondCount;
+        if (coins > 0) {
+          const secondsToAdd = coins * settings.timerSecondsPerCoin;
+          overlayServer.addTimerTime(secondsToAdd);
+          console.log(`[Timer] Added ${secondsToAdd}s for ${coins} coins (${event.giftName} x${event.giftCount})`);
+        }
+      }
+    }
 
 
     if (mapping && mapping.enabled) {
@@ -208,6 +224,37 @@ function setupIpcHandlers() {
     return true;
   });
 
+  ipcMain.handle('settings:setTimerEnabled', (_, enabled: boolean) => {
+    storageService.setTimerEnabled(enabled);
+    overlayServer.broadcastTimerState(enabled, storageService.getSettings().timerInitialValue);
+    return true;
+  });
+
+  ipcMain.handle('settings:setTimerInitialValue', (_, seconds: number) => {
+    storageService.setTimerInitialValue(seconds);
+    overlayServer.broadcastTimerState(storageService.getSettings().timerEnabled, seconds);
+    return true;
+  });
+
+  ipcMain.handle('settings:setTimerSecondsPerCoin', (_, seconds: number) => {
+    storageService.setTimerSecondsPerCoin(seconds);
+    return true;
+  });
+
+  ipcMain.handle('timer:togglePause', () => {
+    overlayServer.toggleTimerPause();
+    return true;
+  });
+
+  ipcMain.handle('timer:stop', () => {
+    overlayServer.stopTimer();
+    return true;
+  });
+
+  ipcMain.handle('timer:addManual', (_, seconds: number) => {
+    overlayServer.addTimerTime(seconds);
+    return true;
+  });
 
   ipcMain.handle('audioLibrary:import', async () => {
     return await audioLibraryService.importFile();
@@ -363,6 +410,17 @@ app.on('activate', () => {
 app.whenReady().then(async () => {
   setupTikTokEvents();
   setupIpcHandlers();
+
+  overlayServer.on('clientConnected', () => {
+    const settings = storageService.getSettings();
+    overlayServer.broadcastTimerState(settings.timerEnabled, settings.timerInitialValue);
+  });
+
+  overlayServer.on('timer-tick', (data) => {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('timer:tick', data);
+    }
+  });
 
   // Create window first for faster perceived startup
   createWindow();
