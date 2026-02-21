@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,6 +22,173 @@ interface RoomInfo {
   nickname: string;
   profilePictureUrl: string;
 }
+
+// Isolated component to prevent App re-renders on every keystroke
+const TimerOverrideInput = ({
+  giftId,
+  initialValue,
+  onSave
+}: {
+  giftId: string;
+  initialValue?: number;
+  onSave: (giftId: string, val: number | undefined) => void
+}) => {
+  const [localValue, setLocalValue] = useState<string>(initialValue ? initialValue.toString() : '');
+
+  // Sync if external value changes (e.g. settings loaded)
+  useEffect(() => {
+    setLocalValue(initialValue !== undefined ? initialValue.toString() : '');
+  }, [initialValue]);
+
+  const handleBlurOrEnter = () => {
+    const val = parseFloat(localValue);
+    if (isNaN(val)) {
+      onSave(giftId, undefined);
+    } else {
+      if (val !== initialValue) {
+        onSave(giftId, val);
+      }
+    }
+  };
+
+  return (
+    <Input
+      type="number"
+      step="0.5"
+      placeholder="Minutos..."
+      className="h-7 w-24 text-xs"
+      value={localValue}
+      onChange={(e) => setLocalValue(e.target.value)}
+      onBlur={handleBlurOrEnter}
+      onKeyDown={(e) => e.key === 'Enter' && handleBlurOrEnter()}
+    />
+  );
+};
+
+const TimerSettingsDialog = ({
+  open,
+  onOpenChange,
+  initialValue,
+  secondsPerCoin,
+  onSave
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  initialValue: number;
+  secondsPerCoin: number;
+  onSave: (initial: number, perCoin: number) => void;
+}) => {
+  const [tempTimerInitialValue, setTempTimerInitialValue] = useState(120);
+  const [tempTimerSecondsPerCoin, setTempTimerSecondsPerCoin] = useState(30);
+
+  useEffect(() => {
+    if (open) {
+      setTempTimerInitialValue(Math.floor(initialValue / 60));
+      setTempTimerSecondsPerCoin(secondsPerCoin);
+    }
+  }, [open, initialValue, secondsPerCoin]);
+
+  const handleSave = () => {
+    const secondsInitial = Math.max(0, tempTimerInitialValue * 60);
+    const secsPerCoin = Math.max(0, tempTimerSecondsPerCoin);
+    onSave(secondsInitial, secsPerCoin);
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Configurações Globais do Cronômetro</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-4 py-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium" title="Tempo inicial em cada início de overlay">Tempo Inicial (minutos)</label>
+            <Input
+              type="number"
+              placeholder="Exemplo: 120 (2 horas)"
+              value={tempTimerInitialValue}
+              onChange={(e) => setTempTimerInitialValue(parseInt(e.target.value) || 0)}
+            />
+            <p className="text-xs text-muted-foreground">O timer vai recomeçar nesse tempo quando for reiniciado.</p>
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium" title="Quanto tempo soma para cada 1 de diamante">Tempo por Moeda (segundos)</label>
+            <Input
+              type="number"
+              placeholder="Exemplo: 30"
+              value={tempTimerSecondsPerCoin}
+              onChange={(e) => setTempTimerSecondsPerCoin(parseInt(e.target.value) || 0)}
+            />
+            <p className="text-xs text-muted-foreground">Fator padrão multiplicador de tempo pelas moedas do presente recebido.</p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button variant="default" onClick={handleSave}>Concluir</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+const AddManualTimeDialog = ({
+  open,
+  onOpenChange,
+  onAdd
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onAdd: (minutes: number) => void;
+}) => {
+  const [localValue, setLocalValue] = useState('');
+
+  useEffect(() => {
+    if (open) {
+      setLocalValue('');
+    }
+  }, [open]);
+
+  const handleAdd = () => {
+    const minutes = parseFloat(localValue);
+    if (!isNaN(minutes) && minutes !== 0) {
+      onAdd(minutes);
+      onOpenChange(false);
+    } else {
+      toast.error('Por favor insira um valor válido de minutos');
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Adicionar Tempo ao Cronômetro</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-4 py-4">
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Tempo a adicionar (em minutos)</label>
+            <Input
+              type="number"
+              placeholder="Exemplo: 10, 30, ou -5 para remover"
+              value={localValue}
+              onChange={(e) => setLocalValue(e.target.value)}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleAdd();
+              }}
+            />
+            <p className="text-xs text-muted-foreground">Use valores negativos para reduzir o tempo (ex: -10).</p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
+          <Button onClick={handleAdd}>Adicionar Tempo</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
 
 interface GiftEvent {
   userId: string;
@@ -94,11 +261,21 @@ function App() {
   const [timerEnabled, setTimerEnabled] = useState(false);
   const [timerInitialValue, setTimerInitialValue] = useState(7200);
   const [timerSecondsPerCoin, setTimerSecondsPerCoin] = useState(30);
-  const [isTimerPaused, setIsTimerPaused] = useState(false);
+  const [isTimerPaused, setIsTimerPaused] = useState(true);
   const [timeLeft, setTimeLeft] = useState(0);
   const [isManualTimeDialogOpen, setIsManualTimeDialogOpen] = useState(false);
-  const [manualTimeValue, setManualTimeValue] = useState('');
+
   const [isTimerSettingsDialogOpen, setIsTimerSettingsDialogOpen] = useState(false);
+
+  const handleSaveTimerSettings = async (secondsInitial: number, secondsPerCoin: number) => {
+    setTimerInitialValue(secondsInitial);
+    setTimerSecondsPerCoin(secondsPerCoin);
+
+    if (window.electronAPI) {
+      await window.electronAPI.setTimerInitialValue(secondsInitial);
+      await window.electronAPI.setTimerSecondsPerCoin(secondsPerCoin);
+    }
+  };
 
 
   const addLog = useCallback((type: LogEntry['type'], message: string) => {
@@ -281,7 +458,13 @@ function App() {
   const updateQueueSize = async () => {
     try {
       const progress = await window.electronAPI.getOverlayQueueProgress();
-      setAudioQueueProgress({ ...progress, estimatedSeconds: progress.estimatedSeconds || 0 });
+      setAudioQueueProgress((prev) => {
+        const estimatedSeconds = progress.estimatedSeconds || 0;
+        if (prev.current === progress.current && prev.total === progress.total && prev.remaining === progress.remaining && prev.estimatedSeconds === estimatedSeconds) {
+          return prev;
+        }
+        return { ...progress, estimatedSeconds };
+      });
     } catch (error) {
       console.error('Failed to get queue progress:', error);
     }
@@ -386,18 +569,6 @@ function App() {
     if (window.electronAPI) await window.electronAPI.setTimerEnabled(enabled);
   };
 
-  const handleTimerInitialValueChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseInt(e.target.value) || 0;
-    setTimerInitialValue(val);
-    if (window.electronAPI) await window.electronAPI.setTimerInitialValue(val);
-  };
-
-  const handleTimerSecondsPerCoinChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseInt(e.target.value) || 0;
-    setTimerSecondsPerCoin(val);
-    if (window.electronAPI) await window.electronAPI.setTimerSecondsPerCoin(val);
-  };
-
   const handleToggleTimerPause = async () => {
     if (window.electronAPI && window.electronAPI.toggleTimerPause) {
       await window.electronAPI.toggleTimerPause();
@@ -414,29 +585,42 @@ function App() {
   };
 
   const handleOpenManualTimeDialog = () => {
-    setManualTimeValue('');
     setIsManualTimeDialogOpen(true);
   };
 
-  const handleAddManualTime = async () => {
-    const minutes = parseFloat(manualTimeValue);
-    if (!isNaN(minutes) && minutes !== 0) {
-      const seconds = Math.floor(minutes * 60);
-      if (window.electronAPI && window.electronAPI.addManualTimer) {
-        await window.electronAPI.addManualTimer(seconds);
-        toast.success(`Adicionado ${minutes} minutos ao cronômetro`);
-        addLog('info', `Added ${minutes} minutes to timer manually`);
-      }
-      setIsManualTimeDialogOpen(false);
-    } else {
-      toast.error('Por favor insira um valor válido de minutos');
+  const handleAddManualTime = async (minutes: number) => {
+    const seconds = Math.floor(minutes * 60);
+    if (window.electronAPI && window.electronAPI.addManualTimer) {
+      await window.electronAPI.addManualTimer(seconds);
+      toast.success(`Adicionado ${minutes} minutos ao cronômetro`);
+      addLog('info', `Added ${minutes} minutes to timer manually`);
     }
   };
 
 
-  const filteredMappings = Object.values(giftMappings).filter(
-    (m) => m.giftName.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredMappings = useMemo(() => {
+    return Object.values(giftMappings).filter(
+      (m) => m.giftName.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [giftMappings, searchTerm]);
+
+  const processedAvailableGifts = useMemo(() => {
+    return availableGifts
+      .filter((g) =>
+        !giftMappings[g.id?.toString()] &&
+        g.name?.toLowerCase().includes(searchTerm.toLowerCase())
+      )
+      .sort((a, b) => {
+        if (sortOrder === 'asc') {
+          return (a.diamondCount || 0) - (b.diamondCount || 0);
+        } else if (sortOrder === 'desc') {
+          return (b.diamondCount || 0) - (a.diamondCount || 0);
+        }
+        return 0;
+      });
+  }, [availableGifts, giftMappings, searchTerm, sortOrder]);
+
+  const reversedLogs = useMemo(() => [...logs].reverse(), [logs]);
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -768,16 +952,10 @@ function App() {
                                 ⏱️ Timer Override
                               </span>
                               <div className="flex items-center gap-2">
-                                <Input
-                                  type="number"
-                                  step="0.5"
-                                  placeholder="Minutos..."
-                                  className="h-7 w-24 text-xs"
-                                  value={mapping.customTimerAmount || ''}
-                                  onChange={(e) => {
-                                    const val = parseFloat(e.target.value);
-                                    handleUpdateMapping(mapping.giftId, { customTimerAmount: isNaN(val) ? undefined : val });
-                                  }}
+                                <TimerOverrideInput
+                                  giftId={mapping.giftId}
+                                  initialValue={mapping.customTimerAmount}
+                                  onSave={(id, val) => handleUpdateMapping(id, { customTimerAmount: val })}
                                 />
                                 <span className="text-[10px] text-muted-foreground">min</span>
                               </div>
@@ -833,37 +1011,24 @@ function App() {
               </div>
               <ScrollArea className="h-[calc(100vh-220px)]">
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 p-1 pb-16">
-                  {availableGifts
-                    .filter((g) =>
-                      !giftMappings[g.id?.toString()] &&
-                      g.name?.toLowerCase().includes(searchTerm.toLowerCase())
-                    )
-                    .sort((a, b) => {
-                      if (sortOrder === 'asc') {
-                        return (a.diamondCount || 0) - (b.diamondCount || 0);
-                      } else if (sortOrder === 'desc') {
-                        return (b.diamondCount || 0) - (a.diamondCount || 0);
-                      }
-                      return 0;
-                    })
-                    .map((gift, index) => {
-                      const imageUrl = gift.imageUrl || gift.image?.url_list?.[0] || '';
-                      return (
-                        <div
-                          key={`gift-${gift.id}-${index}`}
-                          className="flex flex-col items-center p-3 rounded-lg border border-border bg-card hover:bg-accent cursor-pointer transition-colors"
-                          onClick={() => handleSelectAudio(gift.id?.toString(), gift.name)}
-                        >
-                          {imageUrl ? (
-                            <img src={imageUrl} alt={gift.name} className="w-12 h-12 object-contain mb-2" />
-                          ) : (
-                            <div className="w-12 h-12 flex items-center justify-center text-2xl mb-2">🎁</div>
-                          )}
-                          <span className="text-sm font-medium text-center truncate w-full">{gift.name}</span>
-                          <span className="text-xs text-muted-foreground">💎 {gift.diamondCount || 0}</span>
-                        </div>
-                      );
-                    })}
+                  {processedAvailableGifts.map((gift, index) => {
+                    const imageUrl = gift.imageUrl || gift.image?.url_list?.[0] || '';
+                    return (
+                      <div
+                        key={`gift-${gift.id}-${index}`}
+                        className="flex flex-col items-center p-3 rounded-lg border border-border bg-card hover:bg-accent cursor-pointer transition-colors"
+                        onClick={() => handleSelectAudio(gift.id?.toString(), gift.name)}
+                      >
+                        {imageUrl ? (
+                          <img src={imageUrl} alt={gift.name} className="w-12 h-12 object-contain mb-2" />
+                        ) : (
+                          <div className="w-12 h-12 flex items-center justify-center text-2xl mb-2">🎁</div>
+                        )}
+                        <span className="text-sm font-medium text-center truncate w-full">{gift.name}</span>
+                        <span className="text-xs text-muted-foreground">💎 {gift.diamondCount || 0}</span>
+                      </div>
+                    );
+                  })}
                   {availableGifts.filter(g => !giftMappings[g.id?.toString()]).length === 0 && (
                     <div className="col-span-full flex flex-col items-center justify-center py-12 text-muted-foreground">
                       <p className="text-lg">No available gifts</p>
@@ -963,7 +1128,7 @@ function App() {
             <CardContent className="flex-1 overflow-hidden p-0">
               <ScrollArea className="h-full px-6 py-3">
                 <div className="space-y-1 text-sm">
-                  {[...logs].reverse().map((log) => (
+                  {reversedLogs.map((log) => (
                     <div
                       key={log.id}
                       className={`flex gap-2 py-1 px-2 rounded ${log.type === 'error' ? 'bg-red-500/10 text-red-400' :
@@ -1002,65 +1167,18 @@ function App() {
         currentPaths={selectedGiftId ? (giftMappings[selectedGiftId]?.audioFiles.map(e => e.path) || []) : []}
       />
 
-      <Dialog open={isManualTimeDialogOpen} onOpenChange={setIsManualTimeDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Adicionar Tempo ao Cronômetro</DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col gap-4 py-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Tempo a adicionar (em minutos)</label>
-              <Input
-                type="number"
-                placeholder="Exemplo: 10, 30, ou -5 para remover"
-                value={manualTimeValue}
-                onChange={(e) => setManualTimeValue(e.target.value)}
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleAddManualTime();
-                }}
-              />
-              <p className="text-xs text-muted-foreground">Use valores negativos para reduzir o tempo (ex: -10).</p>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsManualTimeDialogOpen(false)}>Cancelar</Button>
-            <Button onClick={handleAddManualTime}>Adicionar Tempo</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <Dialog open={isTimerSettingsDialogOpen} onOpenChange={setIsTimerSettingsDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Configurações Globais do Cronômetro</DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col gap-4 py-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium" title="Tempo inicial em cada início de overlay">Tempo Inicial (segundos)</label>
-              <Input
-                type="number"
-                placeholder="Exemplo: 7200 (2 horas)"
-                value={timerInitialValue}
-                onChange={handleTimerInitialValueChange}
-              />
-              <p className="text-xs text-muted-foreground">O timer vai recomeçar nesse tempo quando for reiniciado.</p>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium" title="Quanto tempo soma para cada 1 de diamante">Tempo por Moeda (segundos)</label>
-              <Input
-                type="number"
-                placeholder="Exemplo: 30"
-                value={timerSecondsPerCoin}
-                onChange={handleTimerSecondsPerCoinChange}
-              />
-              <p className="text-xs text-muted-foreground">Fator padrão multiplicador de tempo pelas moedas do presente recebido.</p>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="default" onClick={() => setIsTimerSettingsDialogOpen(false)}>Concluir</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <AddManualTimeDialog
+        open={isManualTimeDialogOpen}
+        onOpenChange={setIsManualTimeDialogOpen}
+        onAdd={handleAddManualTime}
+      />
+      <TimerSettingsDialog
+        open={isTimerSettingsDialogOpen}
+        onOpenChange={setIsTimerSettingsDialogOpen}
+        initialValue={timerInitialValue}
+        secondsPerCoin={timerSecondsPerCoin}
+        onSave={handleSaveTimerSettings}
+      />
     </div>
   );
 }

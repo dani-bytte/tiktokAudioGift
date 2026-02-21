@@ -43,7 +43,7 @@ class OverlayServer extends EventEmitter {
     private timerEnabled: boolean = false;
     private timerInitialValue: number = 7200;
     private timeLeft: number = 0;
-    private isTimerPaused: boolean = false;
+    private isTimerPaused: boolean = true;
     private timerInterval: NodeJS.Timeout | null = null;
 
 
