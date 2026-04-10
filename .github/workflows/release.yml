@@ -103,11 +103,14 @@ jobs:
       - name: Publish GitHub release
         shell: bash
         run: |
-          if gh release view "${{ needs.prepare.outputs.tag }}" >/dev/null 2>&1; then
+          repo="${{ github.repository }}"
+
+          if gh release view "${{ needs.prepare.outputs.tag }}" --repo "$repo" >/dev/null 2>&1; then
             exit 0
           fi
 
           gh release create "${{ needs.prepare.outputs.tag }}" artifacts/* \
+            --repo "$repo" \
             --title "${{ needs.prepare.outputs.tag }}" \
             --target "${{ github.sha }}" \
             --generate-notes
