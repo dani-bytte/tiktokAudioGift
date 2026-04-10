@@ -8,11 +8,13 @@
   "directories": {
     "output": "release/${version}"
   },
+  "icon": "public/icon",
   "files": [
     "dist",
     "dist-electron"
   ],
   "npmRebuild": false,
+  "publish": "never",
   "mac": {
     "target": [
       "dmg"
@@ -20,7 +22,7 @@
     "artifactName": "${productName}-Mac-${version}-Installer.${ext}"
   },
   "win": {
-    "icon": "public/icon.png",
+    "icon": "public/icon.ico",
     "target": [
       {
         "target": "portable",
@@ -32,6 +34,7 @@
     "artifactName": "${productName}-${version}-Portable.${ext}"
   },
   "linux": {
+    "category": "AudioVideo",
     "target": [
       "AppImage"
     ],
