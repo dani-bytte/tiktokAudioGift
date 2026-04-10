@@ -14,7 +14,6 @@
     "dist-electron"
   ],
   "npmRebuild": false,
-  "publish": "never",
   "mac": {
     "target": [
       "dmg"

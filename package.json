@@ -7,8 +7,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && electron-builder",
-    "build:fast": "tsc && vite build && electron-builder --dir",
+    "build": "tsc && vite build && electron-builder --publish never",
+    "build:fast": "tsc && vite build && electron-builder --dir --publish never",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview"
   },
