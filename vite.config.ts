@@ -1,9 +1,13 @@
 import { defineConfig } from 'vite'
 import path from "path"
+import { fileURLToPath } from "node:url"
+import { builtinModules } from "node:module"
+import os from "node:os"
 import tailwindcss from "@tailwindcss/vite"
 import electron from 'vite-plugin-electron/simple'
 import react from '@vitejs/plugin-react'
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const externals = [
   'express',
@@ -12,10 +16,14 @@ const externals = [
   'utf-8-validate',
   'electron-store',
   'tiktok-live-connector',
+  'music-metadata',
+  ...builtinModules,
+  ...builtinModules.map((m) => `node:${m}`),
 ];
 
 
 export default defineConfig({
+  cacheDir: path.join(os.homedir(), ".cache", "tiktokaudiogift-vite"),
   plugins: [
     react(),
     tailwindcss(),

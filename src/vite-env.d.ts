@@ -1,5 +1,9 @@
 
 
+/// <reference types="vite/client" />
+
+declare module '*.css';
+
 
 interface GiftAudioMapping {
   giftId: string;
@@ -17,6 +21,7 @@ interface AppSettings {
   showGiftAnimation: boolean;
   globalVolume: number;
   signApiKey: string;
+  overlayShowLeaderboard?: boolean;
 }
 
 type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -29,6 +34,7 @@ interface ElectronAPI {
   setTimerEnabled: (enabled: boolean) => Promise<boolean>;
   setTimerInitialValue: (value: number) => Promise<boolean>;
   setTimerSecondsPerCoin: (seconds: number) => Promise<boolean>;
+  setOverlayShowLeaderboard: (enabled: boolean) => Promise<boolean>;
 
   toggleTimerPause: () => Promise<boolean>;
   stopTimer: () => Promise<boolean>;
@@ -47,14 +53,33 @@ interface ElectronAPI {
 
 
   getOverlayUrl: () => Promise<string>;
+  getTimerOverlayUrl: () => Promise<string>;
   getOverlayConnectedCount: () => Promise<number>;
 
 
   triggerTestGift: (giftName: string) => Promise<boolean>;
 
+  getLeaderboard: () => Promise<{ gifters: LeaderboardEntry[]; likers: LeaderboardEntry[]; totalLikesLive: number }>;
+  getMonthlyHistory: () => Promise<MonthlyHistory[]>;
+  resetLeaderboard: () => Promise<boolean>;
+
 
   on: (channel: string, callback: (...args: any[]) => void) => void;
   off: (channel: string, callback: (...args: any[]) => void) => void;
+}
+
+interface LeaderboardEntry {
+  userId: string;
+  username: string;
+  nickname: string;
+  score: number;
+  count: number;
+}
+
+interface MonthlyHistory {
+  month: string;
+  topGiftSenders: LeaderboardEntry[];
+  topLikers: LeaderboardEntry[];
 }
 
 declare global {

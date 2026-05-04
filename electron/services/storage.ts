@@ -12,6 +12,8 @@ export interface GiftAudioMapping {
   audioFiles: AudioFileEntry[];
   enabled: boolean;
   customTimerAmount?: number;
+  mediaPath?: string;
+  mediaEnabled?: boolean;
 }
 
 export interface CachedGift {
@@ -19,6 +21,19 @@ export interface CachedGift {
   name: string;
   diamondCount: number;
   imageUrl: string;
+}
+
+export interface PersistedGiftEntry {
+  nickname: string;
+  username: string;
+  giftCount: number;
+  diamondCount: number;
+}
+
+export interface PersistedLikeEntry {
+  nickname: string;
+  username: string;
+  likeCount: number;
 }
 
 export interface AppSettings {
@@ -34,6 +49,29 @@ export interface AppSettings {
   timerEnabled: boolean;
   timerInitialValue: number;
   timerSecondsPerCoin: number;
+  overlayShowLeaderboard: boolean;
+  monthlyHistory: MonthlyHistory[];
+  giftLeaderboard: Record<string, PersistedGiftEntry>;
+  likeLeaderboard: Record<string, PersistedLikeEntry>;
+  sessionRoomId: string;
+}
+
+export interface MonthlyHistory {
+  month: string;
+  topGiftSenders: Array<{
+    userId: string;
+    username: string;
+    nickname: string;
+    score: number;
+    count: number;
+  }>;
+  topLikers: Array<{
+    userId: string;
+    username: string;
+    nickname: string;
+    score: number;
+    count: number;
+  }>;
 }
 
 const defaultSettings: AppSettings = {
@@ -47,8 +85,13 @@ const defaultSettings: AppSettings = {
   audioFileNames: {},
   audioFileVolumes: {},
   timerEnabled: false,
-  timerInitialValue: 7200, // 2 hours in seconds
+  timerInitialValue: 7200,
   timerSecondsPerCoin: 30,
+  overlayShowLeaderboard: true,
+  monthlyHistory: [],
+  giftLeaderboard: {},
+  likeLeaderboard: {},
+  sessionRoomId: '',
 };
 
 class StorageService {
@@ -75,6 +118,11 @@ class StorageService {
       timerEnabled: this.store.get('timerEnabled', false),
       timerInitialValue: this.store.get('timerInitialValue', 7200),
       timerSecondsPerCoin: this.store.get('timerSecondsPerCoin', 30),
+      overlayShowLeaderboard: this.store.get('overlayShowLeaderboard', true),
+      monthlyHistory: this.store.get('monthlyHistory', []),
+      giftLeaderboard: this.store.get('giftLeaderboard', {}),
+      likeLeaderboard: this.store.get('likeLeaderboard', {}),
+      sessionRoomId: this.store.get('sessionRoomId', ''),
     };
 
 
@@ -148,6 +196,10 @@ class StorageService {
 
   setTimerSecondsPerCoin(seconds: number): void {
     this.store.set('timerSecondsPerCoin', seconds);
+  }
+
+  setOverlayShowLeaderboard(enabled: boolean): void {
+    this.store.set('overlayShowLeaderboard', enabled);
   }
 
   setGiftAudio(mapping: GiftAudioMapping): void {
@@ -238,6 +290,53 @@ class StorageService {
   getAudioDuration(audioId: string): number | undefined {
     const durations = this.store.get('audioFileDurations', {} as Record<string, number>);
     return durations[audioId];
+  }
+
+  // Leaderboard persistence
+  saveGiftLeaderboard(data: Record<string, PersistedGiftEntry>): void {
+    this.store.set('giftLeaderboard', data);
+  }
+
+  getGiftLeaderboard(): Record<string, PersistedGiftEntry> {
+    return this.store.get('giftLeaderboard', {});
+  }
+
+  saveLikeLeaderboard(data: Record<string, PersistedLikeEntry>): void {
+    this.store.set('likeLeaderboard', data);
+  }
+
+  getLikeLeaderboard(): Record<string, PersistedLikeEntry> {
+    return this.store.get('likeLeaderboard', {});
+  }
+
+  setSessionRoomId(roomId: string): void {
+    this.store.set('sessionRoomId', roomId);
+  }
+
+  getSessionRoomId(): string {
+    return this.store.get('sessionRoomId', '');
+  }
+
+  clearSessionLeaderboards(): void {
+    this.store.set('giftLeaderboard', {});
+    this.store.set('likeLeaderboard', {});
+    this.store.set('sessionRoomId', '');
+  }
+
+  addMonthlyHistory(entry: MonthlyHistory): void {
+    const history = this.store.get('monthlyHistory', [] as MonthlyHistory[]);
+    history.unshift(entry);
+
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - 11);
+    const cutoffMonth = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}`;
+
+    const filtered = history.filter((item) => item.month >= cutoffMonth);
+    this.store.set('monthlyHistory', filtered);
+  }
+
+  getMonthlyHistory(): MonthlyHistory[] {
+    return this.store.get('monthlyHistory', [] as MonthlyHistory[]);
   }
 }
 

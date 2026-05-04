@@ -1,10 +1,13 @@
 import { app, BrowserWindow, ipcMain, dialog, Menu } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { tiktokService, GiftEvent } from './services/tiktok';
+import fs from 'node:fs';
+import { tiktokService, GiftEvent, LikeEvent } from './services/tiktok';
 import { overlayServer } from './services/overlay';
 import { storageService } from './services/storage';
 import { audioLibraryService } from './services/audioLibrary';
+import { leaderboardService } from './services/leaderboard';
+import { mediaLibraryService } from './services/mediaLibrary';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -18,6 +21,7 @@ export const RENDERER_DIST = path.join(process.env.APP_ROOT, 'dist');
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL ? path.join(process.env.APP_ROOT, 'public') : RENDERER_DIST;
 
 let win: BrowserWindow | null;
+let leaderboardBroadcastInterval: NodeJS.Timeout | null = null;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -59,6 +63,36 @@ function safeSend(channel: string, ...args: unknown[]) {
   }
 }
 
+function resolveAudioPath(audioPath: string): string {
+  if (fs.existsSync(audioPath)) return audioPath;
+
+  const filename = audioPath.split(/[/\\]/).pop();
+  if (!filename) return audioPath;
+
+  const libraryFiles = audioLibraryService.getFiles();
+  const byFilename = libraryFiles.find((file) => file.filename === filename);
+  if (byFilename?.path && fs.existsSync(byFilename.path)) {
+    return byFilename.path;
+  }
+
+  return audioPath;
+}
+
+function resolveMediaPath(mediaPath: string): string {
+  if (fs.existsSync(mediaPath)) return mediaPath;
+
+  const filename = mediaPath.split(/[/\\]/).pop();
+  if (!filename) return mediaPath;
+
+  const mediaFiles = mediaLibraryService.getFiles();
+  const byFilename = mediaFiles.find((file) => file.filename === filename);
+  if (byFilename?.path && fs.existsSync(byFilename.path)) {
+    return byFilename.path;
+  }
+
+  return mediaPath;
+}
+
 function setupTikTokEvents() {
   tiktokService.on('status', (status) => {
     safeSend('tiktok:status', status);
@@ -85,6 +119,19 @@ function setupTikTokEvents() {
 
     const enrichedEvent = { ...event, giftName };
 
+    const cachedDiamondCount = storageService
+      .getCachedGifts()
+      .find((g) => g.id.toString() === event.giftId)?.diamondCount || 0;
+    const effectiveDiamondCount = event.diamondCount > 0 ? event.diamondCount : cachedDiamondCount;
+
+    leaderboardService.addGift(
+      event.userId,
+      event.username,
+      event.nickname,
+      effectiveDiamondCount,
+      event.giftCount,
+    );
+
 
     safeSend('tiktok:gift', enrichedEvent);
 
@@ -110,6 +157,26 @@ function setupTikTokEvents() {
 
 
     if (mapping && mapping.enabled) {
+      const getMediaForGift = () => {
+        if (!mapping.mediaEnabled || !mapping.mediaPath) return undefined;
+
+        const mediaFullPath = resolveMediaPath(mapping.mediaPath);
+        if (!fs.existsSync(mediaFullPath)) {
+          console.warn(`[Media] File not found for gift ${giftName}: ${mapping.mediaPath}`);
+          return undefined;
+        }
+
+        const mediaExt = path.extname(mediaFullPath).toLowerCase();
+        const mimeMap: Record<string, string> = {
+          '.gif': 'image/gif',
+          '.mp4': 'video/mp4',
+          '.webm': 'video/webm',
+        };
+        const mime = mimeMap[mediaExt] || 'video/mp4';
+        return { mediaPath: mediaFullPath, mimeType: mime };
+      };
+
+      const mediaForGift = getMediaForGift();
 
       let audioPathToPlay: string | undefined = mapping.audioPath;
 
@@ -126,30 +193,26 @@ function setupTikTokEvents() {
       }
 
       if (audioPathToPlay) {
+        audioPathToPlay = resolveAudioPath(audioPathToPlay);
         const settings = storageService.getSettings();
         const globalVolume = settings.globalVolume;
 
-
         const filename = audioPathToPlay.split(/[/\\]/).pop() || '';
-        const audioId = filename.replace(/\.[^/.]+$/, "");
+        const audioId = filename.replace(/\.[^/.]+$/, '');
         const audioVolume = storageService.getAudioVolume(audioId);
         const audioDuration = storageService.getAudioDuration(audioId) || 0;
 
         console.log(`[Audio] File: ${filename}, ID: ${audioId}, Audio Volume: ${audioVolume}, Global: ${globalVolume}`);
 
         const finalVolume = audioVolume * globalVolume;
-
-
-
         const repeatCount = Math.min(event.giftCount, 20);
         const delayMs = 250;
 
         console.log(`[Audio] Playing "${giftName}" x${repeatCount} (Original count: ${event.giftCount}) - File: ${audioPathToPlay} @ ${Math.round(audioVolume * 100)}% vol`);
 
-        // Play first audio with duration
-        overlayServer.playAudio(event.giftId, giftName, event.nickname, audioPathToPlay, finalVolume, audioDuration);
+        // Play first audio + media
+        overlayServer.playAudio(event.giftId, giftName, event.nickname, audioPathToPlay, finalVolume, audioDuration, mediaForGift);
         win?.webContents.send('audio:played', { giftId: event.giftId, giftName });
-
 
         if (repeatCount > 1) {
           let played = 1;
@@ -158,7 +221,6 @@ function setupTikTokEvents() {
               clearInterval(interval);
               return;
             }
-
 
             let nextAudioPath = audioPathToPlay!;
             let nextVolume = finalVolume;
@@ -171,21 +233,32 @@ function setupTikTokEvents() {
               } else {
                 nextAudioPath = nextAudio.path;
               }
+              nextAudioPath = resolveAudioPath(nextAudioPath);
 
               const nextFilename = nextAudioPath.split(/[/\\]/).pop() || '';
-              const nextAudioId = nextFilename.replace(/\.[^/.]+$/, "");
+              const nextAudioId = nextFilename.replace(/\.[^/.]+$/, '');
               const nextAudioVolume = storageService.getAudioVolume(nextAudioId);
               nextVolume = nextAudioVolume * globalVolume;
             }
 
             const nextFilename = nextAudioPath.split(/[/\\]/).pop() || '';
-            const nextAudioIdForDuration = nextFilename.replace(/\.[^/.]+$/, "");
+            const nextAudioIdForDuration = nextFilename.replace(/\.[^/.]+$/, '');
             const nextDuration = storageService.getAudioDuration(nextAudioIdForDuration) || 0;
 
             console.log(`[Audio] Playing repetition ${played + 1}/${repeatCount} for ${giftName} - File: ${nextAudioPath.split(/[/\\]/).pop()}`);
-            overlayServer.playAudio(event.giftId, giftName, event.nickname, nextAudioPath, nextVolume, nextDuration);
+            overlayServer.playAudio(event.giftId, giftName, event.nickname, nextAudioPath, nextVolume, nextDuration, mediaForGift);
             played++;
           }, delayMs);
+        }
+      } else if (mediaForGift) {
+        const repeatCount = Math.min(event.giftCount, 20);
+        for (let i = 0; i < repeatCount; i++) {
+          overlayServer.playMedia(
+            mediaForGift.mediaPath,
+            mediaForGift.mimeType,
+            giftName,
+            event.nickname,
+          );
         }
       }
     }
@@ -195,12 +268,46 @@ function setupTikTokEvents() {
     win?.webContents.send('tiktok:chat', event);
   });
 
+  tiktokService.on('like', (event: LikeEvent) => {
+    if (!event.userId) return;
+
+    leaderboardService.addLike(
+      event.userId,
+      event.username,
+      event.nickname,
+      event.likeCount,
+      event.totalLikeCount,
+    );
+
+    safeSend('tiktok:like', event);
+  });
+
   tiktokService.on('member', (event) => {
     win?.webContents.send('tiktok:member', event);
   });
 
   tiktokService.on('roomStats', (stats) => {
     win?.webContents.send('tiktok:roomStats', stats);
+  });
+
+  // Seed leaderboard with historical top gifters from TikTok on first ROOM_USER
+  let seededHistory = false;
+  tiktokService.on('roomTopGifters', (ranks: any[]) => {
+    if (seededHistory) return;
+    seededHistory = true;
+
+    console.log(`[Leaderboard] Seeding ${ranks.length} historical top gifters from room`);
+    for (const rank of ranks) {
+      const user = rank.user || rank;
+      const userId = user.userId?.toString() || user.id?.toString() || `rank-${rank.score}`;
+      const username = user.uniqueId || '';
+      const nickname = user.nickname || user.uniqueId || 'Anonymous';
+      const score = rank.score || 0;
+
+      if (score > 0) {
+        leaderboardService.addGift(userId, username, nickname, score, 1);
+      }
+    }
   });
 }
 
@@ -241,6 +348,12 @@ function setupIpcHandlers() {
     return true;
   });
 
+  ipcMain.handle('settings:setOverlayShowLeaderboard', (_, enabled: boolean) => {
+    storageService.setOverlayShowLeaderboard(enabled);
+    overlayServer.setLeaderboardVisibility(enabled);
+    return true;
+  });
+
   ipcMain.handle('timer:togglePause', () => {
     overlayServer.toggleTimerPause();
     return true;
@@ -278,11 +391,56 @@ function setupIpcHandlers() {
     return true;
   });
 
+  ipcMain.handle('mediaLibrary:import', async () => {
+    return await mediaLibraryService.importFile();
+  });
+
+  ipcMain.handle('mediaLibrary:list', () => {
+    return mediaLibraryService.getFiles();
+  });
+
+  ipcMain.handle('mediaLibrary:delete', (_, filename: string) => {
+    return mediaLibraryService.deleteFile(filename);
+  });
+
+  ipcMain.handle('mediaLibrary:selectFile', async () => {
+    const result = await dialog.showOpenDialog(win!, {
+      title: 'Select Media File',
+      filters: [
+        { name: 'Media Files', extensions: ['gif', 'mp4', 'webm'] },
+      ],
+      properties: ['openFile'],
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    const imported = await mediaLibraryService.copyFileToLibrary(result.filePaths[0]);
+    return imported?.path || null;
+  });
+
+  ipcMain.handle('mediaLibrary:getOverlayUrlForPath', (_, mediaPath: string) => {
+    if (!mediaPath || typeof mediaPath !== 'string') return null;
+
+    const resolvedPath = resolveMediaPath(mediaPath);
+    if (!fs.existsSync(resolvedPath)) return null;
+
+    const ext = path.extname(resolvedPath).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.gif': 'image/gif',
+      '.mp4': 'video/mp4',
+      '.webm': 'video/webm',
+    };
+    const mime = mimeMap[ext];
+    if (!mime) return null;
+
+    const route = overlayServer.registerMediaFile(resolvedPath, mime);
+    if (!route) return null;
+    return `${overlayServer.getUrl()}${route}`;
+  });
 
   ipcMain.handle('tiktok:connect', async (_, username: string) => {
     if (!username || typeof username !== 'string') throw new Error('Invalid username');
 
     storageService.setLastUsername(username);
+    leaderboardService.onSessionStart();
     return await tiktokService.connect(username);
   });
 
@@ -338,6 +496,27 @@ function setupIpcHandlers() {
     return storageService.getAllGiftMappings();
   });
 
+  ipcMain.handle('leaderboard:get', () => {
+    return leaderboardService.getFullData();
+  });
+
+  ipcMain.handle('leaderboard:getGift', () => {
+    return leaderboardService.getTopGiftSenders(50);
+  });
+
+  ipcMain.handle('leaderboard:getLike', () => {
+    return leaderboardService.getTopLikers(50);
+  });
+
+  ipcMain.handle('leaderboard:getMonthlyHistory', () => {
+    return leaderboardService.getMonthlyHistory();
+  });
+
+  ipcMain.handle('leaderboard:reset', () => {
+    leaderboardService.resetSession();
+    return true;
+  });
+
   ipcMain.handle('audio:selectFile', async () => {
     const result = await dialog.showOpenDialog(win!, {
       title: 'Select Audio File',
@@ -347,12 +526,19 @@ function setupIpcHandlers() {
       ],
       properties: ['openFile'],
     });
-    return result.canceled ? null : result.filePaths[0];
+    if (result.canceled || result.filePaths.length === 0) return null;
+
+    const imported = await audioLibraryService.copyFileToLibrary(result.filePaths[0]);
+    return imported?.path || null;
   });
 
 
   ipcMain.handle('overlay:getUrl', () => {
     return overlayServer.getUrl();
+  });
+
+  ipcMain.handle('overlay:getTimerUrl', () => {
+    return overlayServer.getTimerUrl();
   });
 
   ipcMain.handle('overlay:getConnectedCount', () => {
@@ -394,6 +580,10 @@ function setupIpcHandlers() {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    if (leaderboardBroadcastInterval) {
+      clearInterval(leaderboardBroadcastInterval);
+      leaderboardBroadcastInterval = null;
+    }
     tiktokService.disconnect();
     overlayServer.stop();
     app.quit();
@@ -414,6 +604,7 @@ app.whenReady().then(async () => {
   overlayServer.on('clientConnected', () => {
     const settings = storageService.getSettings();
     overlayServer.broadcastTimerState(settings.timerEnabled, settings.timerInitialValue);
+    overlayServer.setLeaderboardVisibility(settings.overlayShowLeaderboard ?? true);
   });
 
   overlayServer.on('timer-tick', (data) => {
@@ -421,6 +612,13 @@ app.whenReady().then(async () => {
       win.webContents.send('timer:tick', data);
     }
   });
+
+  leaderboardBroadcastInterval = setInterval(() => {
+    overlayServer.broadcast({
+      type: 'leaderboard-update',
+      data: leaderboardService.getOverlayData(),
+    });
+  }, 5000);
 
   // Create window first for faster perceived startup
   createWindow();

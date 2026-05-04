@@ -3,6 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
 import { EventEmitter } from 'events';
 import path from 'path';
+import fs from 'node:fs';
 
 export interface PlayAudioMessage {
     type: 'play-audio';
@@ -12,6 +13,22 @@ export interface PlayAudioMessage {
         giftName: string;
         username: string;
         giftId: string;
+        media?: {
+            mediaUrl: string;
+            type: 'gif' | 'video';
+            giftName: string;
+            username: string;
+        };
+    };
+}
+
+export interface PlayMediaMessage {
+    type: 'play-media';
+    data: {
+        mediaUrl: string;
+        type: 'gif' | 'video';
+        giftName: string;
+        username: string;
     };
 }
 
@@ -29,6 +46,8 @@ class OverlayServer extends EventEmitter {
     private isRunning: boolean = false;
     // Map of audio ID to absolute file path
     private audioFiles: Map<string, string> = new Map();
+    // Map of media ID to { path, mimeType }
+    private mediaFiles: Map<string, { path: string; mimeType: string }> = new Map();
     // Track queue size and progress on server side
     private queueSize: number = 0;
     private totalInBatch: number = 0;
@@ -45,6 +64,7 @@ class OverlayServer extends EventEmitter {
     private timeLeft: number = 0;
     private isTimerPaused: boolean = true;
     private timerInterval: NodeJS.Timeout | null = null;
+    private showLeaderboard: boolean = true;
 
 
     registerAudioFile(audioPath: string): string {
@@ -57,6 +77,18 @@ class OverlayServer extends EventEmitter {
         const id = Buffer.from(audioPath).toString('base64url');
         this.audioFiles.set(id, audioPath);
         return `/audio/${id}`;
+    }
+
+    registerMediaFile(mediaPath: string, mimeType: string): string {
+        const ext = path.extname(mediaPath).toLowerCase();
+        if (!/\.(gif|mp4|webm)$/i.test(ext)) {
+            console.error(`[Overlay] Blocked attempt to register non-media file: ${mediaPath}`);
+            return '';
+        }
+
+        const id = Buffer.from(mediaPath).toString('base64url');
+        this.mediaFiles.set(id, { path: mediaPath, mimeType });
+        return `/media/${id}`;
     }
 
     async start(port: number = 3847, libraryPath?: string): Promise<void> {
@@ -109,6 +141,29 @@ class OverlayServer extends EventEmitter {
             '.flac': 'audio/flac',
         };
 
+        // Media route (GIF/MP4/WebM)
+        this.app.get('/media/:id', (req: Request, res: Response) => {
+            const id = req.params.id as string;
+            const media = this.mediaFiles.get(id);
+
+            if (!media) {
+                return res.status(404).send('Media not found');
+            }
+
+            const normalizedPath = path.normalize(media.path);
+            res.setHeader('Content-Type', media.mimeType);
+            res.setHeader('Cache-Control', 'public, max-age=3600');
+
+            res.sendFile(normalizedPath, (err: Error | null) => {
+                if (err) {
+                    console.error('[Overlay] Failed to send media file:', err);
+                    if (!res.headersSent) {
+                        res.status(404).send('Media file not found');
+                    }
+                }
+            });
+        });
+
         this.app.get('/audio/:id', (req: Request, res: Response) => {
             const id = req.params.id as string;
             const audioPath = this.audioFiles.get(id);
@@ -156,6 +211,10 @@ class OverlayServer extends EventEmitter {
 
         this.app.get('/', (_req: Request, res: Response) => {
             res.send(OVERLAY_HTML);
+        });
+
+        this.app.get('/timer', (_req: Request, res: Response) => {
+            res.send(TIMER_OVERLAY_HTML);
         });
 
         // Debug diagnostic page for troubleshooting audio on other PCs
@@ -230,6 +289,13 @@ class OverlayServer extends EventEmitter {
                     timerEnabled: this.timerEnabled,
                 }
             }));
+
+            ws.send(JSON.stringify({
+                type: 'leaderboard-visibility',
+                data: {
+                    enabled: this.showLeaderboard,
+                }
+            }));
         });
 
         return new Promise((resolve, reject) => {
@@ -262,6 +328,10 @@ class OverlayServer extends EventEmitter {
 
     getUrl(): string {
         return `http://lvh.me:${this.port}`;
+    }
+
+    getTimerUrl(): string {
+        return `http://lvh.me:${this.port}/timer`;
     }
 
     broadcast(message: OverlayMessage): void {
@@ -326,6 +396,14 @@ class OverlayServer extends EventEmitter {
         }
     }
 
+    setLeaderboardVisibility(enabled: boolean): void {
+        this.showLeaderboard = enabled;
+        this.broadcast({
+            type: 'leaderboard-visibility',
+            data: { enabled: this.showLeaderboard },
+        });
+    }
+
     toggleTimerPause(): void {
         this.isTimerPaused = !this.isTimerPaused;
         this.emitTimerTick();
@@ -337,9 +415,39 @@ class OverlayServer extends EventEmitter {
         this.emitTimerTick();
     }
 
-    playAudio(giftId: string, giftName: string, username: string, audioPath: string, volume: number, duration: number = 0): void {
+    playAudio(
+        giftId: string,
+        giftName: string,
+        username: string,
+        audioPath: string,
+        volume: number,
+        duration: number = 0,
+        media?: { mediaPath: string; mimeType: string }
+    ): void {
         // Register the audio file and get a URL for it
         const audioUrl = this.registerAudioFile(audioPath);
+
+        let mediaData: PlayAudioMessage['data']['media'] | undefined;
+        if (media) {
+            const ext = path.extname(media.mediaPath).toLowerCase();
+            const dir = path.dirname(media.mediaPath);
+            const baseName = path.basename(media.mediaPath, ext);
+            const optPath = path.join(dir, `${baseName}_opt.mp4`);
+            const actualPath = fs.existsSync(optPath) ? optPath : media.mediaPath;
+            const actualExt = path.extname(actualPath).toLowerCase();
+            const actualMime = actualExt === '.mp4' ? 'video/mp4' : media.mimeType;
+            const mediaType: 'gif' | 'video' = actualExt === '.gif' ? 'gif' : 'video';
+            const mediaUrl = this.registerMediaFile(actualPath, actualMime);
+
+            if (mediaUrl) {
+                mediaData = {
+                    mediaUrl,
+                    type: mediaType,
+                    giftName,
+                    username,
+                };
+            }
+        }
 
         const message: PlayAudioMessage = {
             type: 'play-audio',
@@ -349,6 +457,7 @@ class OverlayServer extends EventEmitter {
                 giftName,
                 username,
                 giftId,
+                media: mediaData,
             },
         };
         console.log('Broadcasting audio play:', audioUrl, 'volume:', volume, 'duration:', duration);
@@ -369,6 +478,34 @@ class OverlayServer extends EventEmitter {
             // Adding to existing batch - increment total
             this.totalInBatch++;
         }
+    }
+
+    playMedia(mediaPath: string, mimeType: string, giftName: string, username: string): void {
+        const ext = path.extname(mediaPath).toLowerCase();
+
+        // Check for pre-optimized version
+        const dir = path.dirname(mediaPath);
+        const baseName = path.basename(mediaPath, ext);
+        const optPath = path.join(dir, `${baseName}_opt.mp4`);
+        const actualPath = fs.existsSync(optPath) ? optPath : mediaPath;
+        const actualExt = path.extname(actualPath).toLowerCase();
+        const actualMime = actualExt === '.mp4' ? 'video/mp4' : mimeType;
+        const mediaType: 'gif' | 'video' = actualExt === '.gif' ? 'gif' : 'video';
+
+        const mediaUrl = this.registerMediaFile(actualPath, actualMime);
+        if (!mediaUrl) return;
+
+        const message: PlayMediaMessage = {
+            type: 'play-media',
+            data: {
+                mediaUrl,
+                type: mediaType,
+                giftName,
+                username,
+            },
+        };
+        console.log(`[Overlay] Broadcasting ${mediaType}: ${mediaUrl}`);
+        this.broadcast(message);
     }
 
     // Get current queue progress with time estimation
@@ -411,11 +548,75 @@ const OVERLAY_HTML = `<!DOCTYPE html>
             height: 100vh;
         }
 
-        /* Timer UI */
-        #timer-container {
+        /* Timer + Leaderboard */
+        #timer-container,
+        #leaderboard {
             font-family: 'Segoe UI', sans-serif;
+            position: fixed;
+        }
+        #timer-container {
             z-index: 90;
             transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+        #leaderboard {
+            top: 20px;
+            right: 20px;
+            z-index: 80;
+            background: rgba(0, 0, 0, 0.6);
+            border-radius: 12px;
+            padding: 12px 16px;
+            min-width: 220px;
+            max-width: 300px;
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        #leaderboard .lb-section {
+            margin-bottom: 10px;
+        }
+        #leaderboard .lb-section:last-child {
+            margin-bottom: 0;
+        }
+        #leaderboard .lb-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: #a78bfa;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        #leaderboard .lb-entry {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 0;
+            font-size: 13px;
+            color: #e2e8f0;
+        }
+        #leaderboard .lb-rank {
+            width: 22px;
+            text-align: center;
+            font-size: 12px;
+        }
+        #leaderboard .lb-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        #leaderboard .lb-score {
+            font-size: 11px;
+            font-weight: 600;
+            color: #fbbf24;
+            white-space: nowrap;
+        }
+        #leaderboard .lb-empty {
+            font-size: 12px;
+            color: #64748b;
+            text-align: center;
+            padding: 8px 0;
         }
         #timer-container.hidden {
             opacity: 0;
@@ -490,6 +691,44 @@ const OVERLAY_HTML = `<!DOCTYPE html>
             0% { transform: scale(0.8); opacity: 1; }
             100% { transform: scale(1.8); opacity: 0; }
         }
+
+        /* Media display (GIF/Video) */
+        #media-display {
+            position: fixed;
+            bottom: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 95;
+            pointer-events: none;
+        }
+        #media-display .media-item {
+            display: none;
+            max-width: 300px;
+            max-height: 250px;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.15);
+            background: rgba(0,0,0,0.4);
+        }
+        #media-display .media-item.active {
+            display: block;
+            animation: mediaIn 0.3s ease-out, mediaOut 0.4s ease-in 5.5s forwards;
+        }
+        #media-display .media-item img,
+        #media-display .media-item video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        @keyframes mediaIn {
+            0% { opacity: 0; transform: scale(0.7) translateY(20px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        @keyframes mediaOut {
+            0% { opacity: 1; }
+            100% { opacity: 0; }
+        }
     </style>
 </head>
 <body>
@@ -500,6 +739,12 @@ const OVERLAY_HTML = `<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- Leaderboard Overlay UI -->
+    <div id="leaderboard"></div>
+
+    <!-- Media Display (GIF/Video) -->
+    <div id="media-display"></div>
+
     <!-- Click-to-enable audio overlay: user clicks once to unlock AudioContext -->
     <div id="audio-enable-overlay">
         <div class="pulse-ring"></div>
@@ -509,13 +754,23 @@ const OVERLAY_HTML = `<!DOCTYPE html>
     </div>
 
     <script>
-        const status = document.getElementById('status');
         const enableOverlay = document.getElementById('audio-enable-overlay');
+        const leaderboardContainer = document.getElementById('leaderboard');
+        const params = new URLSearchParams(window.location.search);
+        const forceHideLeaderboardByQuery = params.get('showLeaderboard') === '0';
+        let showLeaderboard = !forceHideLeaderboardByQuery;
+
+        function applyLeaderboardVisibility() {
+            if (!leaderboardContainer) return;
+            leaderboardContainer.style.display = showLeaderboard ? 'block' : 'none';
+        }
+
+        applyLeaderboardVisibility();
         let ws = null;
         let reconnectInterval = null;
 
-        // Audio state
-        const audioQueue = [];
+        // Playback state (audio and media serialized in a single queue)
+        const playbackQueue = [];
         let isPlaying = false;
         let currentAudio = null;
 
@@ -527,8 +782,14 @@ const OVERLAY_HTML = `<!DOCTYPE html>
         let timerEnabled = false;
         let timeLeft = 0;
         let isTimerPaused = false;
+
+        // Media state
+        let mediaPool = [];
+        const MAX_MEDIA_POOL = 3;
+        const MEDIA_GIF_DURATION_MS = 6000;
         const timerContainer = document.getElementById('timer-container');
         const timerDisplay = document.getElementById('timer-display');
+        const mediaDisplay = document.getElementById('media-display');
         
         function formatTime(totalSeconds) {
             const h = Math.floor(Math.max(totalSeconds, 0) / 3600);
@@ -653,9 +914,10 @@ const OVERLAY_HTML = `<!DOCTYPE html>
 
         function handleMessage(msg) {
             if (msg.type === 'play-audio') {
-                audioQueue.push({
-                    url: msg.data.audioUrl,
-                    volume: msg.data.volume
+                playbackQueue.push({
+                    audioUrl: msg.data.audioUrl,
+                    volume: msg.data.volume,
+                    media: msg.data.media || null,
                 });
                 processQueue();
             } else if (msg.type === 'timer-tick') {
@@ -663,43 +925,209 @@ const OVERLAY_HTML = `<!DOCTYPE html>
                 timeLeft = msg.data.timeLeft;
                 isTimerPaused = msg.data.isTimerPaused;
                 updateTimerDisplay();
+            } else if (msg.type === 'leaderboard-update') {
+                renderLeaderboard(msg.data);
+            } else if (msg.type === 'leaderboard-visibility') {
+                if (!forceHideLeaderboardByQuery) {
+                    showLeaderboard = Boolean(msg.data && msg.data.enabled);
+                    applyLeaderboardVisibility();
+                }
             } else if (msg.type === 'get-queue-size') {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({
                         type: 'queue-size',
-                        data: audioQueue.length + (isPlaying ? 1 : 0)
+                        data: playbackQueue.length + (isPlaying ? 1 : 0)
                     }));
                 }
             } else if (msg.type === 'clear-queue') {
-                audioQueue.length = 0;
+                playbackQueue.length = 0;
                 if (currentAudio) {
                     currentAudio.pause();
                     currentAudio = null;
                 }
                 isPlaying = false;
                 console.log('Queue cleared');
+            } else if (msg.type === 'play-media') {
+                playbackQueue.push({
+                    audioUrl: null,
+                    volume: 1,
+                    media: msg.data,
+                });
+                processQueue();
             }
+        }
+
+        function playMediaOverlay(data, onDone) {
+            if (!mediaDisplay) return;
+
+            // Create or reuse a media item
+            let mediaItem = mediaPool.pop();
+            if (!mediaItem) {
+                mediaItem = document.createElement('div');
+                mediaItem.className = 'media-item';
+                mediaDisplay.appendChild(mediaItem);
+            }
+
+            // Clear previous content
+            mediaItem.innerHTML = '';
+            mediaItem.className = 'media-item';
+
+            let finished = false;
+            function finishOnce() {
+                if (finished) return;
+                finished = true;
+                onDone();
+            }
+
+            if (data.type === 'gif') {
+                const img = document.createElement('img');
+                img.src = data.mediaUrl;
+                img.alt = data.giftName || 'Gift';
+                mediaItem.appendChild(img);
+
+                setTimeout(function() {
+                    mediaItem.classList.remove('active');
+                    setTimeout(function() {
+                        if (!mediaItem.classList.contains('active')) {
+                            mediaItem.innerHTML = '';
+                            if (mediaPool.length < MAX_MEDIA_POOL) {
+                                mediaPool.push(mediaItem);
+                            } else {
+                                mediaItem.remove();
+                            }
+                        }
+                        finishOnce();
+                    }, 500);
+                }, MEDIA_GIF_DURATION_MS);
+            } else {
+                const video = document.createElement('video');
+                video.src = data.mediaUrl;
+                video.autoplay = true;
+                video.loop = false;
+                video.muted = true;
+                video.playsInline = true;
+                video.onended = function() {
+                    mediaItem.classList.remove('active');
+                    setTimeout(function() {
+                        if (!mediaItem.classList.contains('active')) {
+                            mediaItem.innerHTML = '';
+                            if (mediaPool.length < MAX_MEDIA_POOL) {
+                                mediaPool.push(mediaItem);
+                            } else {
+                                mediaItem.remove();
+                            }
+                        }
+                        finishOnce();
+                    }, 500);
+                };
+                video.onerror = function() {
+                    mediaItem.classList.remove('active');
+                    setTimeout(function() {
+                        mediaItem.innerHTML = '';
+                        finishOnce();
+                    }, 200);
+                };
+                mediaItem.appendChild(video);
+            }
+
+            // Show with animation
+            requestAnimationFrame(function() {
+                mediaItem.classList.add('active');
+            });
+
+            if (data.type !== 'gif') {
+                const video = mediaItem.querySelector('video');
+                if (video && video.play) {
+                    video.play().catch(function() {
+                        // keep waiting for onerror fallback
+                    });
+                }
+            }
+        }
+
+        function renderLeaderboard(data) {
+            if (!showLeaderboard) return;
+            const container = document.getElementById('leaderboard');
+            if (!container) return;
+
+            const gifters = (data.gifters || []).slice(0, 3);
+            const likers = (data.likers || []).slice(0, 3);
+            const totalLikesLive = Number(data.totalLikesLive || 0);
+
+            let html = '';
+            if (gifters.length > 0) {
+                html += '<div class="lb-section"><div class="lb-title"><span>💎</span> Top Presentes (Top 3)</div>';
+                gifters.forEach(function(entry, i) {
+                    html += '<div class="lb-entry">';
+                    html += '<span class="lb-rank">' + (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '#' + (i + 1)) + '</span>';
+                    html += '<span class="lb-name">' + (entry.nickname || entry.username || 'Anônimo') + '</span>';
+                    html += '<span class="lb-score">' + entry.score.toLocaleString() + ' 💎</span>';
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+            if (likers.length > 0) {
+                html += '<div class="lb-section"><div class="lb-title"><span>❤️</span> Top Curtidas (Top 3)</div>';
+                likers.forEach(function(entry, i) {
+                    html += '<div class="lb-entry">';
+                    html += '<span class="lb-rank">' + (i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '#' + (i + 1)) + '</span>';
+                    html += '<span class="lb-name">' + (entry.nickname || entry.username || 'Anônimo') + '</span>';
+                    html += '<span class="lb-score">' + entry.score.toLocaleString() + ' ❤️</span>';
+                    html += '</div>';
+                });
+                html += '</div>';
+            }
+
+            html += '<div class="lb-section"><div class="lb-title"><span>🔥</span> Total Curtidas</div>';
+            html += '<div class="lb-entry"><span class="lb-rank">•</span><span class="lb-name">Live atual</span><span class="lb-score">' + totalLikesLive.toLocaleString() + ' ❤️</span></div>';
+            html += '</div>';
+
+            container.innerHTML = html || '<div class="lb-empty">Aguardando eventos...</div>';
         }
 
         function processQueue() {
             // Don't process if audio isn't unlocked yet — items stay queued
-            if (!audioUnlocked || isPlaying || audioQueue.length === 0) {
+            if (!audioUnlocked || isPlaying || playbackQueue.length === 0) {
                 return;
             }
 
             isPlaying = true;
-            const item = audioQueue.shift();
+            const item = playbackQueue.shift();
 
-            playAudio(item.url, item.volume, () => {
+            if (!item.audioUrl && item.media) {
+                playMediaOverlay(item.media, () => {
+                    isPlaying = false;
+                    setTimeout(processQueue, 100);
+                });
+                return;
+            }
+
+            playAudio(item.audioUrl, item.volume, item.media, () => {
                 isPlaying = false;
                 setTimeout(processQueue, 100);
             });
         }
 
-        function playAudio(url, volume, onEnded) {
+        function playAudio(url, volume, media, onEnded) {
             if (currentAudio) {
                 currentAudio.pause();
                 currentAudio = null;
+            }
+
+            let audioFinished = false;
+            let mediaFinished = !media;
+
+            function maybeFinish() {
+                if (audioFinished && mediaFinished) {
+                    onEnded();
+                }
+            }
+
+            if (media) {
+                playMediaOverlay(media, () => {
+                    mediaFinished = true;
+                    maybeFinish();
+                });
             }
 
             // Ensure AudioContext is running before playing
@@ -729,7 +1157,8 @@ const OVERLAY_HTML = `<!DOCTYPE html>
                         duration: audio.duration || 0
                     }));
                 }
-                onEnded();
+                audioFinished = true;
+                maybeFinish();
             };
 
             audio.onerror = (e) => {
@@ -737,7 +1166,8 @@ const OVERLAY_HTML = `<!DOCTYPE html>
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: 'audio-ended' }));
                 }
-                onEnded();
+                audioFinished = true;
+                maybeFinish();
             };
 
             audio.play().catch(e => {
@@ -745,8 +1175,126 @@ const OVERLAY_HTML = `<!DOCTYPE html>
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     ws.send(JSON.stringify({ type: 'audio-ended' }));
                 }
-                onEnded();
+                audioFinished = true;
+                maybeFinish();
             });
+        }
+
+        connect();
+    </script>
+</body>
+</html>`;
+
+const TIMER_OVERLAY_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok Timer Overlay</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: transparent;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #timer-container {
+            font-family: 'Segoe UI', sans-serif;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+        #timer-container.hidden {
+            opacity: 0;
+            pointer-events: none;
+            transform: scale(0.9);
+        }
+        .timer-box {
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(4px);
+            border-radius: 8px;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #timer-display {
+            color: #fff;
+            font-size: 72px;
+            font-weight: bold;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: 2px;
+            text-shadow: 0 4px 8px rgba(0,0,0,0.6);
+        }
+    </style>
+</head>
+<body>
+    <div id="timer-container" class="hidden">
+        <div class="timer-box">
+            <span id="timer-display">00:00:00</span>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let reconnectInterval = null;
+        let timerEnabled = false;
+        let timeLeft = 0;
+        let isTimerPaused = false;
+        const timerContainer = document.getElementById('timer-container');
+        const timerDisplay = document.getElementById('timer-display');
+
+        function formatTime(totalSeconds) {
+            const h = Math.floor(Math.max(totalSeconds, 0) / 3600);
+            const m = Math.floor((Math.max(totalSeconds, 0) % 3600) / 60);
+            const s = Math.floor(Math.max(totalSeconds, 0) % 60);
+            if (h > 0) {
+                return h.toString().padStart(2, '0') + ':' + m.toString().padStart(2, '0') + ':' + s.toString().padStart(2, '0');
+            }
+            return m.toString().padStart(2, '0') + ':' + s.toString().padStart(2, '0');
+        }
+
+        function updateTimerDisplay() {
+            if (timerEnabled && timeLeft > 0) {
+                timerContainer.classList.remove('hidden');
+            } else {
+                timerContainer.classList.add('hidden');
+            }
+            timerDisplay.textContent = formatTime(timeLeft);
+            timerDisplay.style.color = isTimerPaused ? '#ffcc00' : '#fff';
+        }
+
+        function connect() {
+            ws = new WebSocket('ws://' + window.location.host);
+
+            ws.onopen = () => {
+                if (reconnectInterval) {
+                    clearInterval(reconnectInterval);
+                    reconnectInterval = null;
+                }
+            };
+
+            ws.onclose = () => {
+                if (!reconnectInterval) {
+                    reconnectInterval = setInterval(connect, 3000);
+                }
+            };
+
+            ws.onerror = () => ws.close();
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'timer-tick') {
+                        timerEnabled = msg.data.timerEnabled;
+                        timeLeft = msg.data.timeLeft;
+                        isTimerPaused = msg.data.isTimerPaused;
+                        updateTimerDisplay();
+                    }
+                } catch (e) {}
+            };
         }
 
         connect();

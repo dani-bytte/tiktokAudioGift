@@ -38,7 +38,6 @@ export function AudioSelectionDialog({ open, onOpenChange, onSave, currentPaths 
     } else {
       stopAudio();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const loadFiles = async () => {
