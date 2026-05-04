@@ -53,6 +53,8 @@ interface ElectronAPI {
 
 
   getOverlayUrl: () => Promise<string>;
+  getMediaAudioOverlayUrl: () => Promise<string>;
+  getLeaderboardOverlayUrl: () => Promise<string>;
   getTimerOverlayUrl: () => Promise<string>;
   getOverlayConnectedCount: () => Promise<number>;
 

@@ -537,6 +537,14 @@ function setupIpcHandlers() {
     return overlayServer.getUrl();
   });
 
+  ipcMain.handle('overlay:getMediaAudioUrl', () => {
+    return overlayServer.getMediaAudioUrl();
+  });
+
+  ipcMain.handle('overlay:getLeaderboardUrl', () => {
+    return overlayServer.getLeaderboardUrl();
+  });
+
   ipcMain.handle('overlay:getTimerUrl', () => {
     return overlayServer.getTimerUrl();
   });

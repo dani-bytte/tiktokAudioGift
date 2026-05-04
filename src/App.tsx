@@ -292,7 +292,8 @@ function App() {
   const [username, setUsername] = useState("");
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
-  const [overlayUrl, setOverlayUrl] = useState("");
+  const [mediaAudioOverlayUrl, setMediaAudioOverlayUrl] = useState("");
+  const [leaderboardOverlayUrl, setLeaderboardOverlayUrl] = useState("");
   const [timerOverlayUrl, setTimerOverlayUrl] = useState("");
   const [overlayConnected, setOverlayConnected] = useState(0);
   const [audioQueueProgress, setAudioQueueProgress] = useState({
@@ -425,8 +426,12 @@ function App() {
       try {
         await loadSettings();
 
-        const url = await window.electronAPI.getOverlayUrl();
-        setOverlayUrl(url);
+        const mediaAudioUrl =
+          await window.electronAPI.getMediaAudioOverlayUrl();
+        setMediaAudioOverlayUrl(mediaAudioUrl);
+        const leaderboardUrl =
+          await window.electronAPI.getLeaderboardOverlayUrl();
+        setLeaderboardOverlayUrl(leaderboardUrl);
         const timerUrl = await window.electronAPI.getTimerOverlayUrl();
         setTimerOverlayUrl(timerUrl);
 
@@ -523,9 +528,14 @@ function App() {
     }
   };
 
-  const handleCopyUrl = async () => {
-    await navigator.clipboard.writeText(overlayUrl);
-    addLog("info", "Overlay URL copied!");
+  const handleCopyMediaAudioUrl = async () => {
+    await navigator.clipboard.writeText(mediaAudioOverlayUrl);
+    addLog("info", "Media/audio overlay URL copied!");
+  };
+
+  const handleCopyLeaderboardUrl = async () => {
+    await navigator.clipboard.writeText(leaderboardOverlayUrl);
+    addLog("info", "Leaderboard overlay URL copied!");
   };
 
   const handleCopyTimerUrl = async () => {
@@ -873,34 +883,60 @@ function App() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
+                
                   <div className="space-y-2">
                     <label className="text-sm text-muted-foreground">
-                      Browser Source URL (Audio + Timer + Rank)
+                      Audio + Mídia
                     </label>
                     <div className="flex gap-2">
                       <Input
                         type="text"
-                        value={overlayUrl}
+                        value={mediaAudioOverlayUrl}
                         readOnly
                         className="flex-1"
                       />
                       <Button
                         variant="secondary"
                         size="icon"
-                        onClick={handleCopyUrl}
+                        onClick={handleCopyMediaAudioUrl}
                         title="Copy URL"
                       >
                         📋
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Add this URL as a Browser Source in OBS
+                      Playback only (audio + mídia).
                     </p>
                   </div>
 
                   <div className="space-y-2">
                     <label className="text-sm text-muted-foreground">
-                      Timer-only Overlay URL
+                      Ranking
+                    </label>
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        value={leaderboardOverlayUrl}
+                        readOnly
+                        className="flex-1"
+                      />
+                      <Button
+                        variant="secondary"
+                        size="icon"
+                        onClick={handleCopyLeaderboardUrl}
+                        title="Copy URL"
+                      >
+                        📋
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Leaderboard only.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm text-muted-foreground">
+                      Timer-only
                     </label>
                     <div className="flex gap-2">
                       <Input
@@ -919,7 +955,7 @@ function App() {
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Use this source when you want only the timer.
+                      Only the timer.
                     </p>
                   </div>
 

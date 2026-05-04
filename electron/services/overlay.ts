@@ -330,6 +330,14 @@ class OverlayServer extends EventEmitter {
         return `http://lvh.me:${this.port}`;
     }
 
+    getMediaAudioUrl(): string {
+        return `http://lvh.me:${this.port}/?showLeaderboard=0`;
+    }
+
+    getLeaderboardUrl(): string {
+        return `http://lvh.me:${this.port}/?audioMedia=0&showLeaderboard=1`;
+    }
+
     getTimerUrl(): string {
         return `http://lvh.me:${this.port}/timer`;
     }
@@ -759,6 +767,7 @@ const OVERLAY_HTML = `<!DOCTYPE html>
         const params = new URLSearchParams(window.location.search);
         const forceHideLeaderboardByQuery = params.get('showLeaderboard') === '0';
         let showLeaderboard = !forceHideLeaderboardByQuery;
+        const disableAudioMediaByQuery = params.get('audioMedia') === '0';
 
         function applyLeaderboardVisibility() {
             if (!leaderboardContainer) return;
@@ -914,6 +923,7 @@ const OVERLAY_HTML = `<!DOCTYPE html>
 
         function handleMessage(msg) {
             if (msg.type === 'play-audio') {
+                if (disableAudioMediaByQuery) return;
                 playbackQueue.push({
                     audioUrl: msg.data.audioUrl,
                     volume: msg.data.volume,
@@ -948,6 +958,7 @@ const OVERLAY_HTML = `<!DOCTYPE html>
                 isPlaying = false;
                 console.log('Queue cleared');
             } else if (msg.type === 'play-media') {
+                if (disableAudioMediaByQuery) return;
                 playbackQueue.push({
                     audioUrl: null,
                     volume: 1,

@@ -127,6 +127,8 @@ const electronAPI = {
   getMediaOverlayUrlForPath: (mediaPath: string): Promise<string | null> => ipcRenderer.invoke('mediaLibrary:getOverlayUrlForPath', mediaPath),
 
   getOverlayUrl: (): Promise<string> => ipcRenderer.invoke('overlay:getUrl'),
+  getMediaAudioOverlayUrl: (): Promise<string> => ipcRenderer.invoke('overlay:getMediaAudioUrl'),
+  getLeaderboardOverlayUrl: (): Promise<string> => ipcRenderer.invoke('overlay:getLeaderboardUrl'),
   getTimerOverlayUrl: (): Promise<string> => ipcRenderer.invoke('overlay:getTimerUrl'),
   getOverlayConnectedCount: (): Promise<number> => ipcRenderer.invoke('overlay:getConnectedCount'),
   getOverlayQueueSize: (): Promise<number> => ipcRenderer.invoke('overlay:getQueueSize'),
@@ -186,6 +188,8 @@ declare global {
       deleteMediaFile: (filename: string) => Promise<boolean>;
       selectMediaFile: () => Promise<string | null>;
       getMediaOverlayUrlForPath: (mediaPath: string) => Promise<string | null>;
+      getMediaAudioOverlayUrl: () => Promise<string>;
+      getLeaderboardOverlayUrl: () => Promise<string>;
     };
   }
 }
